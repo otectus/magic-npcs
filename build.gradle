@@ -1,0 +1,94 @@
+plugins {
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+}
+
+group = mod_group
+version = mod_version
+archivesBaseName = mod_id
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+minecraft {
+    // Mirrors the ars-n-spells Iron's-integration sibling (same loader + Iron's dep).
+    mappings channel: 'official', version: minecraft_version
+    copyIdeResources = true
+
+    runs {
+        configureEach {
+            workingDirectory project.file('run')
+            mods {
+                magicnpcs {
+                    source sourceSets.main
+                }
+            }
+        }
+
+        client {}
+        server { args '--nogui' }
+
+        // Headless gameplay tests (Phase 6). Gated on the magicnpcs namespace so
+        // other mods' gametests do not run.
+        gameTestServer {
+            args '--nogui'
+            property 'forge.enabledGameTestNamespaces', 'magicnpcs'
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'CurseMaven'
+        url = 'https://cursemaven.com'
+    }
+    // Local Recruits jar lives in libs/; flatDir lets ForgeGradle deobf-remap it
+    // (fg.deobf cannot remap files(...) self-resolving deps).
+    flatDir {
+        dirs 'libs'
+    }
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+    // Iron's Spellbooks is a soft dependency: compile against it, do NOT bundle it.
+    compileOnly fg.deobf("curse.maven:${irons_spellbooks_project}:${irons_spellbooks_file}")
+
+    // Villager Recruits is a soft dependency: compile against the local jar (libs/), do NOT bundle
+    // it (All Rights Reserved). flatDir + fg.deobf remaps it to the workspace mappings.
+    compileOnly fg.deobf("blank:recruits:${recruits_jar_version}")
+    // For a dev runtime with Iron's + Recruits, see docs/dev-runtime.md (full runtimeOnly
+    // snippet + Forge 47.4.0+). Left off here so the default offline build/gametest stay green:
+    // runtimeOnly fg.deobf("blank:recruits:${recruits_jar_version}")
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("META-INF/mods.toml") {
+        expand "version": project.version
+    }
+}
+
+jar {
+    manifest {
+        attributes([
+                "Specification-Title"   : mod_id,
+                "Specification-Vendor"  : mod_authors,
+                "Specification-Version" : "1",
+                "Implementation-Title"  : project.name,
+                "Implementation-Version": project.jar.archiveVersion,
+                "Implementation-Vendor" : mod_authors
+        ])
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}

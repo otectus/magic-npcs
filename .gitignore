@@ -1,0 +1,31 @@
+# IDE / editor
+.blackboxcli/
+.gradle/
+.vscode/
+.idea/
+*.iml
+
+# Build output
+build/
+out/
+logs/
+run/
+
+# Dependencies & local copies
+dependencies/
+mods/
+io/
+/com/
+gradle-8.4/
+gradle-8.4-bin.zip
+*.jar
+# ...but DO commit the Gradle wrapper jar (the ARR Recruits jar in libs/ stays ignored).
+!gradle/wrapper/gradle-wrapper.jar
+
+# Root META-INF (build artifact, not src/main/resources one)
+/META-INF/
+
+# Misc
+nul
+$null
+*.log

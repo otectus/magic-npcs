@@ -1,0 +1,10 @@
+{
+  "entity_type": "recruits:captain",
+  "max_mana": 140,
+  "mana_regen": 10,
+  "spells": [
+    { "spell": "irons_spellbooks:fireball", "level": 2, "weight": 2, "min_range": 6.0, "max_range": 24.0, "safety_radius": 4.0, "role": "attack" },
+    { "spell": "irons_spellbooks:haste", "level": 1, "weight": 1, "role": "support" },
+    { "spell": "irons_spellbooks:heal", "level": 1, "weight": 1, "role": "support" }
+  ]
+}

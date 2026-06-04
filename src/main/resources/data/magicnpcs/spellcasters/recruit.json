@@ -1,0 +1,9 @@
+{
+  "entity_type": "recruits:recruit",
+  "max_mana": 80,
+  "mana_regen": 8,
+  "spells": [
+    { "spell": "irons_spellbooks:magic_missile", "level": 1, "weight": 3, "min_range": 0.0, "max_range": 16.0, "safety_radius": 1.0, "role": "attack" },
+    { "spell": "irons_spellbooks:heal", "level": 1, "weight": 1, "role": "support" }
+  ]
+}
