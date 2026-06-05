@@ -16,6 +16,9 @@ minecraft {
     runs {
         configureEach {
             workingDirectory project.file('run')
+            // 3rd-party production mods (Iron's) ship SRG mixin refmaps; in the named dev runtime,
+            // have Mixin remap them via the runtime naming service so their @Injects resolve.
+            property 'mixin.env.remapRefMap', 'true'
             mods {
                 magicnpcs {
                     source sourceSets.main
@@ -41,6 +44,12 @@ repositories {
         name = 'CurseMaven'
         url = 'https://cursemaven.com'
     }
+    // Modrinth maven — dev-runtime companions (GeckoLib/Curios/PlayerAnimator) by semantic version.
+    maven {
+        name = 'Modrinth'
+        url = 'https://api.modrinth.com/maven'
+        content { includeGroup 'maven.modrinth' }
+    }
     // Local Recruits jar lives in libs/; flatDir lets ForgeGradle deobf-remap it
     // (fg.deobf cannot remap files(...) self-resolving deps).
     flatDir {
@@ -56,9 +65,16 @@ dependencies {
     // Villager Recruits is a soft dependency: compile against the local jar (libs/), do NOT bundle
     // it (All Rights Reserved). flatDir + fg.deobf remaps it to the workspace mappings.
     compileOnly fg.deobf("blank:recruits:${recruits_jar_version}")
-    // For a dev runtime with Iron's + Recruits, see docs/dev-runtime.md (full runtimeOnly
-    // snippet + Forge 47.4.0+). Left off here so the default offline build/gametest stay green:
-    // runtimeOnly fg.deobf("blank:recruits:${recruits_jar_version}")
+    // Phase 7 dev-runtime (-PdevRuntime): load Iron's + its mandatory deps (GeckoLib/Curios/
+    // PlayerAnimator) + Recruits at runtime so casting can actually run. runtimeOnly → never
+    // shipped or committed; versions pinned to Iron's 3.15.x requirements. See docs/dev-runtime.md.
+    if (project.hasProperty('devRuntime')) {
+        runtimeOnly fg.deobf("curse.maven:${irons_spellbooks_project}:${irons_spellbooks_file}")
+        runtimeOnly fg.deobf("blank:geckolib:4.8.3") // libs/geckolib-4.8.3.jar — Modrinth maven served a non-Forge file
+        runtimeOnly fg.deobf("maven.modrinth:curios:5.14.1+1.20.1")
+        runtimeOnly fg.deobf("maven.modrinth:playeranimator:1.0.2-rc1+1.20-forge")
+        runtimeOnly fg.deobf("blank:recruits:${recruits_jar_version}")
+    }
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'

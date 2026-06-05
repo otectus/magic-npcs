@@ -1,7 +1,24 @@
 # Changelog
 
 All notable changes to Magic NPCs are documented here. Versions follow
-`MAJOR.MINOR.PATCH`; this is a pre-1.0 line pending full in-game verification.
+`MAJOR.MINOR.PATCH`; this is a pre-1.0 line.
+
+## [0.1.1] — production-validated
+
+No functional code changes from 0.1.0. Validated the runtime in a real Forge **47.4.16**
+dedicated server (production/SRG space) with Iron's `1.20.1-3.15.x`, GeckoLib 4.8.3,
+Curios 5.14.1+1.20.1, PlayerAnimator 1.0.2-rc1+1.20, and Recruits 1.15.0 installed:
+
+- **Boots cleanly** — Iron's own mixins apply (the SRG-vs-named failure seen in the
+  ForgeGradle *dev* runtime is dev-only), and our `AbstractRecruitEntity` mixin loads
+  without error.
+- **Casting executes:** a tagged skeleton (universal path) and a Villager Recruit
+  (adapter path) both cast Magic Missile via `onCast(CastSource.MOB)` with correct mana
+  deduction (`mana 100 → 90`, `80 → 70`).
+- **Iron's-AI Mixin path works:** with `recruits.useIronsAI=true`, recruits cast via
+  Iron's `WizardAttackGoal` (driven through the mixin's `initiateCastSpell`) — no crash.
+- Build wiring: `forge_version=47.4.16`; a `-PdevRuntime` runtime-companion block (off by
+  default; ships nothing). Default `./gradlew build` stays green + third-party-free.
 
 ## [0.1.0] — initial development build
 
