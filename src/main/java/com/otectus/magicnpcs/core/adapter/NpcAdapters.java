@@ -30,13 +30,20 @@ public final class NpcAdapters {
         ADAPTERS.add(adapter);
     }
 
-    /** @return the first registered adapter that applies to {@code mob}, or a no-op default. */
+    /**
+     * @return the applicable adapter with the highest {@link NpcAdapter#priority()},
+     *         or a no-op default. Highest priority wins so a specific mod adapter
+     *         (e.g. Recruits) beats a broad generic one (e.g. owner/team).
+     */
     public static NpcAdapter resolve(Mob mob) {
+        NpcAdapter best = DEFAULT;
+        int bestPriority = Integer.MIN_VALUE;
         for (NpcAdapter adapter : ADAPTERS) {
-            if (adapter.appliesTo(mob)) {
-                return adapter;
+            if (adapter.appliesTo(mob) && adapter.priority() > bestPriority) {
+                best = adapter;
+                bestPriority = adapter.priority();
             }
         }
-        return DEFAULT;
+        return best;
     }
 }

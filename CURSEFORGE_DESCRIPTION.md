@@ -1,8 +1,9 @@
 # Magic NPCs
 
 **Give your NPCs real spells.** Magic NPCs makes mobs cast spells from *Iron's
-Spells 'n Spellbooks* — driven entirely by datapacks, so any mob can become a
-spellcaster, and **Villager Recruits** get first-class support.
+Spells 'n Spellbooks* — driven by datapacks and config, so any mob can become a
+spellcaster, with first-class support for **Villager Recruits** and a per-NPC
+**magic-school** system for recruits and villagers.
 
 ## What it does
 
@@ -10,26 +11,45 @@ spellcaster, and **Villager Recruits** get first-class support.
   entity type and a list of Iron's spells — that mob now casts them. No tags, no
   add-on mods. Shipped loadouts make Recruits (and, as an example, skeletons) cast
   out of the box, and any pack can override them.
+- **Magic schools (recruits & villagers).** Assign each individual recruit or villager
+  one of the nine Iron's schools — fire, ice, lightning, holy, ender, blood, evocation,
+  nature, eldritch. Its spell pool is built **dynamically** from that school, so it
+  even uses spells added by Iron's add-ons. Schools are assigned automatically on spawn
+  (recruits by chance/rank, villagers by profession), and you can set any individual's
+  school with the **`/magicnpcs school`** command or the **School Tome** item
+  (right-click to cycle, sneak to clear).
 - **Real Iron's casting.** Spells fire through Iron's own cast path, so you get the
   genuine projectiles, particles, and sounds. Mobs have a real mana pool that
   regenerates and gates how often they cast.
-- **Smart, safe Recruits.** Spellcasting recruits scale their mana with their
-  **rank**, cast **only at enemies** (never their owner or allies, using Recruits'
-  own diplomacy), and hold fire when an ally is **in the line of fire**.
-- **Tunable.** A server config controls global on/off, mana/cooldown balance, a
-  spell allow/deny list, friendly-fire safety, and the Recruits options. Optionally,
-  recruits can use Iron's *own* combat AI.
+- **Smart and safe.** Casters check line of sight, range, mana, and cooldowns; they
+  won't cast while sleeping, dead, or on Peaceful, and mana scales with difficulty.
+  Friendly-fire protection keeps villagers, iron golems, players, pets, owners, and
+  teammates out of the blast — and Recruits cast **only at enemies** using their own
+  diplomacy, respect their command state, and scale mana with **rank**.
+- **Works with your NPC mods.** Beyond Recruits, optional config-gated support covers
+  **Guard Villagers, MCA Reborn, MineColonies, Easy NPC, Human Companions, More
+  Villagers, and VillagersPlus** — each behind a toggle that defaults **off**, so
+  nothing changes until you opt in. Owned/teamed NPCs (e.g. Human Companions) get
+  friendly-fire safety automatically.
+- **Deeply tunable.** A server config controls global on/off, mana/cooldown/regen
+  balance, decision interval, difficulty scaling, line-of-sight and friendly-fire
+  rules, a spell allow/deny list, equipment requirements, per-mod compat toggles, and
+  the full magic-school system. Optionally, recruits can use Iron's *own* combat AI.
 
 ## Requirements
 
 - **Forge 47.4.0+** for Minecraft **1.20.1**
-- **Iron's Spells 'n Spellbooks** (3.15.x) + its dependencies **GeckoLib**,
+- **Iron's Spells 'n Spellbooks** (`1.20.1-3.15.x`) + its dependencies **GeckoLib**,
   **Curios API**, **PlayerAnimator** — required for any spellcasting
 - **Villager Recruits** (1.15.0+) — *optional*, enables the recruit features
 
-Magic NPCs does not include these mods; install them separately.
+Magic NPCs does not include these mods; install them separately. Every NPC-mod
+integration is optional and loads safely whether or not that mod is present.
 
 ## Notes
 
 - Server-side config; settings sync to clients automatically.
-- Open source under GPL-3.0.
+- Villagers given a school only actually cast when they have a target (raids, guard
+  mods) — their normal, peaceful behavior is preserved.
+- Open source under GPL-3.0. Iron's Spells and Villager Recruits are compile-only
+  dependencies — neither is bundled or redistributed.

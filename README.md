@@ -83,15 +83,67 @@ Magic NPCs **does not bundle** Iron's or Recruits — install them yourself.
 
 Datapacks override the shipped loadouts — change a mob's spells without touching code.
 
+## Supported NPC mods
+
+Magic NPCs is mod-agnostic: **any** mob with a datapack loadout casts. On top of
+that, these layers add mod-aware safety:
+
+- **Villager Recruits** — first-class compiled adapter: rank-scaled mana,
+  diplomacy-aware targeting (`shouldAttack`), and respect for the command system (a
+  recruit ordered to a passive/flee state won't cast). Ships loadouts for `recruit`,
+  `bowman`, `crossbowman`, `captain`.
+- **Generic owner/team protection** — vanilla-only adapter (scoreboard teams +
+  `OwnableEntity`, which tamable companions/pets implement). Gives **Human Companions**
+  and any owned/teamed NPC friendly-fire safety toward its owner and siblings with no
+  hard dependency. Toggle `targeting.protectOwners`.
+- **Generic bystander protection** — attack spells won't catch villagers (vanilla,
+  MCA, More Villagers, VillagersPlus), iron golems, players, or tamed pets in their
+  line of fire / blast radius. Toggle `targeting.protectBystanders`.
+
+Other NPC mods (**Guard Villagers, MCA Reborn, MineColonies, Easy NPC, Human
+Companions, More/Plus Villagers**) are supported via **config-gated datapack
+loadouts** — no hard dependency. Each has a toggle under `[compat]` (default **off**);
+enable it, then drop in a loadout for that mod's entity types. A ready Guard Villagers
+loadout ships (inert until `compat.guardvillagers = true`), and copy-paste examples
+for the rest live in [`docs/loadouts/`](docs/loadouts/README.md), which also covers
+the known limitations (profession-scoped casting and trades are future work).
+
+## Magic schools (recruits & villagers)
+
+Each individual recruit/villager can be assigned a specific Iron's **school** (fire,
+ice, lightning, holy, ender, blood, evocation, nature, eldritch); its spell pool is
+built dynamically from that school. Assignment is automatic on spawn (persisted), and
+also adjustable per-NPC via the `/magicnpcs school` command or the **School Tome** item
+(right-click to cycle, sneak to clear). Villagers only actually cast when they have a
+target (raids / guard mods) — vanilla passivity is preserved. Full details, including
+the `[schools]` config block, are in [`docs/schools.md`](docs/schools.md).
+
 ## Configuration
 
 Server config `config/magicnpcs-server.toml` (auto-synced to clients):
 
 - **general** — `enableSpellcasting`, `debugLogging`
 - **balance** — `manaMultiplier`, `cooldownMultiplier`, `regenMultiplier`,
-  `decisionIntervalTicks`, `supportHealthThreshold`, `friendlyFireCheck`
+  `decisionIntervalTicks`, `supportHealthThreshold`, `friendlyFireCheck`,
+  `peacefulDisablesCasting`, `difficultyScaling`
+- **targeting** — `requireLineOfSight`, `protectBystanders`, `protectOwners`
+- **equipment** — `requireSpellFocus`, `spawnWithGearChance` (both use the
+  `magicnpcs:spell_focuses` item tag; populate it with staves/spellbooks to use them)
 - **spells** — `spellBlacklist`, `spellWhitelist`
 - **recruits** — `enabled`, `manaPerLevel`, `useIronsAI`, `ironsAiSpeed`, `ironsAiIntervalTicks`
+- **compat** — per-mod loadout toggles (`guardvillagers`, `mca`, `minecolonies`,
+  `easynpc`, `humancompanions`, `morevillagers`, `villagersplus`), all default **off**
+- **schools** — magic-school assignment (`enableSchools`, `allowedSchools`, `maxRarity`,
+  `maxSpellLevel`, `spellsPerSchool`, weighting, base mana…) with `schools.recruits.*`,
+  `schools.villagers.*`, and command/item toggles — see [`docs/schools.md`](docs/schools.md)
+
+### Disabling risky integrations
+
+Every integration is opt-in or independently toggleable. To keep things conservative
+in a large pack: leave all `[compat]` toggles off (the default), keep
+`protectBystanders`/`protectOwners`/`requireLineOfSight` on, and use `spellBlacklist`
+(or a strict `spellWhitelist`) to bar high-collateral spells. Setting
+`enableSpellcasting = false` disables the whole system without removing the mod.
 
 ## Building
 

@@ -7,10 +7,14 @@ import io.redspace.ironsspellbooks.api.registry.AttributeRegistry;
 import io.redspace.ironsspellbooks.api.registry.SpellRegistry;
 import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
 import io.redspace.ironsspellbooks.api.spells.CastSource;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.tags.TagKey;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.item.Item;
 
 /**
  * The single seam to Iron's Spellbooks for the universal (mod-agnostic) casting
@@ -23,7 +27,17 @@ import net.minecraft.world.entity.ai.attributes.AttributeInstance;
  * this class owns the mana economy (deduct on cast, periodic regen) itself.
  */
 public final class IronsBridge {
+    /** Item tag of "spell focuses" (staves/spellbooks/etc.) an NPC may need to hold to cast. */
+    public static final TagKey<Item> SPELL_FOCUSES =
+            TagKey.create(Registries.ITEM, new ResourceLocation("magicnpcs", "spell_focuses"));
+
     private IronsBridge() {}
+
+    /** @return true if the caster holds an item in the {@link #SPELL_FOCUSES} tag in either hand. */
+    public static boolean holdsSpellFocus(LivingEntity caster) {
+        return caster.getItemInHand(InteractionHand.MAIN_HAND).is(SPELL_FOCUSES)
+                || caster.getItemInHand(InteractionHand.OFF_HAND).is(SPELL_FOCUSES);
+    }
 
     /** Resolve a loadout spell id to an Iron's spell, or {@code null} if unknown/unregistered. */
     public static AbstractSpell getSpell(ResourceLocation id) {

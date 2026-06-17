@@ -2,9 +2,12 @@ package com.otectus.magicnpcs;
 
 import com.otectus.magicnpcs.compat.IronsCompat;
 import com.otectus.magicnpcs.compat.RecruitsCompat;
+import com.otectus.magicnpcs.compat.generic.OwnableTeamAdapter;
 import com.otectus.magicnpcs.compat.recruits.RecruitsIntegration;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
+import com.otectus.magicnpcs.core.adapter.NpcAdapters;
 import com.otectus.magicnpcs.integration.irons.IronsIntegration;
+import com.otectus.magicnpcs.registry.MagicNpcsItems;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.fml.ModLoadingContext;
@@ -35,7 +38,15 @@ public class MagicNpcs {
         // Server config — registered unconditionally (Iron's-free); auto-syncs to clients on login.
         ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, MagicNpcsConfig.SPEC, "magicnpcs-server.toml");
 
+        // Items (School Tome) — vanilla-only registration; the item's effect is Iron's-gated at use time.
+        MagicNpcsItems.init(modEventBus);
+
         MinecraftForge.EVENT_BUS.register(this);
+
+        // Generic owner/team friendly-fire protection — vanilla-only (no mod imports),
+        // so it is safe to register always. It is the lowest-priority adapter, so a
+        // specific mod adapter (e.g. Recruits) always wins when both apply.
+        NpcAdapters.register(new OwnableTeamAdapter());
 
         // Iron's-touching code is referenced ONLY inside this guard so it never
         // classloads when Iron's Spellbooks is absent.

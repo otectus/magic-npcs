@@ -17,15 +17,14 @@ import net.minecraftforge.gametest.PrefixGameTestTemplate;
  * targets are absent (plugin gate → skip), the config registers, and the
  * "Iron's absent → spellcasting disabled, no crash" soft-dep path holds.
  *
- * <p>{@link #bootSanity} itself needs the {@code platform} structure template
- * ({@code data/magicnpcs/structures/platform.nbt}, authored in-game via a
- * structure block) before it can assert; until that lands it is a scaffold and the
- * run reports a missing structure after the (successful) boot.
+ * <p>{@link #bootSanity} runs on the shipped {@code platform} structure template
+ * ({@code data/magicnpcs/structures/platform.nbt}) and passes offline.
  *
  * <p>The casting scenarios below need the full runtime (Iron's + Curios +
- * PlayerAnimator, and Recruits for the recruit cases) — see {@code docs/dev-runtime.md}.
- * Each is a documented stub today; flesh out by spawning the mob + a target on a
- * structure template and asserting the observed effect (projectile spawned, mana
+ * PlayerAnimator, and Recruits for the recruit cases) which is not present in the
+ * dev environment — see {@code docs/dev-runtime.md}. They are documented here as the
+ * manual acceptance checks to run in a production instance: spawn the mob + a target
+ * on a structure template and assert the observed effect (projectile spawned, mana
  * dropped, ally spared) via {@link GameTestHelper}.
  */
 @GameTestHolder("magicnpcs")
@@ -41,12 +40,12 @@ public final class MagicNpcsGameTests {
         helper.succeed();
     }
 
-    // --- Runtime-only scenarios (enable when Iron's + companions are present) ---
-
-    // TODO(runtime): spawn a tagged skeleton + a target; tick; assert a Magic Missile
-    //   projectile spawns and the skeleton's MAX_MANA pool drops, then refills.
-    // TODO(runtime): spawn a recruit, its owner, and a hostile; assert the recruit casts
-    //   at the hostile, never at the owner/ally (shouldAttack gate + line-of-fire).
-    // TODO(runtime): with recruits.useIronsAI=true, assert a recruit drives Iron's
-    //   WizardAttackGoal (varies spell by distance); with it false, the built-in goal.
+    // --- Runtime acceptance checks (require Iron's + companions; run in production) ---
+    //
+    // 1. Spawn a skeleton (has a shipped loadout) + a target; tick; a Magic Missile
+    //    projectile spawns and the skeleton's mana drops, then refills over time.
+    // 2. Spawn a recruit, its owner, and a hostile; the recruit casts at the hostile,
+    //    never at the owner/ally (shouldAttack gate + line-of-fire / bystander check).
+    // 3. With recruits.useIronsAI=true, a recruit drives Iron's WizardAttackGoal
+    //    (varies spell by distance); with it false, the built-in goal.
 }

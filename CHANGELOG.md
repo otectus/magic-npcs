@@ -3,6 +3,53 @@
 All notable changes to Magic NPCs are documented here. Versions follow
 `MAJOR.MINOR.PATCH`; this is a pre-1.0 line.
 
+## [0.2.0] — NPC compatibility, hardening & magic schools
+
+A broad release-readiness pass plus a new per-NPC magic-school system. Builds green
+and boots cleanly with or without Iron's/Recruits (offline GameTest `bootSanity`
+passes); runtime casting is unchanged from the proven 0.1.1 path.
+
+### Added
+- **Magic schools for recruits & villagers.** Each individual recruit/villager can be
+  assigned an Iron's school (fire, ice, lightning, holy, ender, blood, evocation,
+  nature, eldritch). The spell pool is built **dynamically** from that school's enabled
+  spells (filtered by rarity/level caps, INSTANT-only, and the allow/deny lists), so
+  add-on spells are picked up automatically. Assignment is stored per-entity in
+  persistent data and rolled once. See `docs/schools.md`.
+  - Automatic on spawn — recruits by chance/rank/mode (`RANDOM`/`BY_TYPE`/`BY_RANK`),
+    villagers by a profession→school map. Villagers only actually cast when they have a
+    target (raids / guard mods), preserving vanilla passivity.
+  - **`/magicnpcs school set|info|reroll|clear <targets> [school]`** command (perm-gated).
+  - **School Tome** item — right-click an NPC to cycle its school, sneak to clear.
+- **Generic owner/team friendly-fire protection** (`targeting.protectOwners`): a
+  vanilla-only adapter (scoreboard teams + `OwnableEntity`) protects companion/pet/
+  follower NPCs (e.g. Human Companions) and their owner with no hard dependency.
+- **Generic bystander protection** (`targeting.protectBystanders`): attack spells avoid
+  catching villagers, iron golems, players, and tamed pets in their line of fire.
+- **Per-mod compat toggles** (`[compat]`, default off) gating datapack loadouts for
+  Guard Villagers, MCA Reborn, MineColonies, Easy NPC, Human Companions, More Villagers,
+  and VillagersPlus. A ready Guard Villagers loadout ships (inert until enabled); copy-
+  paste examples for the rest are in `docs/loadouts/`.
+- **Equipment options** (`[equipment]`): `requireSpellFocus` (NPC must hold an item in
+  the `magicnpcs:spell_focuses` tag) and `spawnWithGearChance`.
+- **Lang file** (`en_us.json`) with config labels + item text; item model reuses the
+  vanilla enchanted-book texture (no third-party asset shipped).
+
+### Changed
+- **Casting hardening.** NPCs no longer cast while sleeping, dead/dying, removed, or
+  AI-disabled; attack spells now require **line of sight** (`requireLineOfSight`); casting
+  is suppressed on **Peaceful** (`peacefulDisablesCasting`); mana pools scale with world
+  **difficulty** (`difficultyScaling`).
+- **Recruits** now respect their command system — a recruit ordered to a passive/flee
+  state will not cast.
+- `bootSanity` GameTest now ships its `platform` structure and passes offline.
+
+### Notes
+- Iron's Spells 'n Spellbooks and Villager Recruits remain **compile-only** soft
+  dependencies — neither is bundled. The 8 non-Recruits NPC mods are supported via
+  config + datapack + generic vanilla-interface adapters (no API imports), so the mod
+  loads safely whether or not they are installed.
+
 ## [0.1.1] — production-validated
 
 No functional code changes from 0.1.0. Validated the runtime in a real Forge **47.4.16**

@@ -8,6 +8,7 @@ import com.otectus.magicnpcs.core.loadout.SpellcasterLoadout;
 import com.otectus.magicnpcs.core.util.LineOfFire;
 import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.Difficulty;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
@@ -60,7 +61,7 @@ public class NpcSpellAttackGoal extends Goal {
     @Override
     public boolean canUse() {
         tickCooldowns();
-        if (spells.isEmpty()) {
+        if (spells.isEmpty() || !canCastInCurrentState()) {
             return false;
         }
         if (decisionTimer > 0) {
@@ -85,6 +86,26 @@ public class NpcSpellAttackGoal extends Goal {
         return false; // INSTANT spells: one cast per activation
     }
 
+    /**
+     * Gate casting on the mob being in a valid, casting-capable state. Vanilla
+     * invalid states (dead/dying, removed/despawning, sleeping, AI disabled) are
+     * always blocked; Peaceful difficulty is blocked when configured; a mod-specific
+     * busy/command state is deferred to the adapter; and an optional held-focus
+     * requirement is enforced last.
+     */
+    private boolean canCastInCurrentState() {
+        if (!mob.isAlive() || mob.isRemoved() || mob.isDeadOrDying() || mob.isSleeping() || mob.isNoAi()) {
+            return false;
+        }
+        if (MagicNpcsConfig.PEACEFUL_DISABLES_CASTING.get() && mob.level().getDifficulty() == Difficulty.PEACEFUL) {
+            return false;
+        }
+        if (!adapter.canCastNow(mob)) {
+            return false;
+        }
+        return !MagicNpcsConfig.REQUIRE_SPELL_FOCUS.get() || IronsBridge.holdsSpellFocus(mob);
+    }
+
     @Override
     public void start() {
         if (chosen.entry().role() == LoadoutEntry.Role.ATTACK) {
@@ -105,7 +126,11 @@ public class NpcSpellAttackGoal extends Goal {
         double distSqr = mob.distanceToSqr(t);
         boolean hurt = mob.getHealth() < mob.getMaxHealth() * MagicNpcsConfig.SUPPORT_HEALTH_THRESHOLD.get();
         boolean canAttackTarget = adapter.canCastAt(mob, t);
-        boolean friendlyFire = MagicNpcsConfig.FRIENDLY_FIRE_CHECK.get() && adapter.tracksAllies();
+        boolean hasLineOfSight = mob.getSensing().hasLineOfSight(t);
+        // Friendly-fire scan runs when the adapter tracks allies OR generic bystander
+        // protection is on (so even an adapter-less skeleton won't blast the townsfolk).
+        boolean friendlyFire = MagicNpcsConfig.FRIENDLY_FIRE_CHECK.get()
+                && (adapter.tracksAllies() || MagicNpcsConfig.PROTECT_BYSTANDERS.get());
 
         List<Resolved> castable = new ArrayList<>();
         int totalWeight = 0;
@@ -128,8 +153,11 @@ public class NpcSpellAttackGoal extends Goal {
                 if (distSqr < e.minRange() * e.minRange() || distSqr > e.maxRange() * e.maxRange()) {
                     continue; // target out of range
                 }
+                if (MagicNpcsConfig.REQUIRE_LINE_OF_SIGHT.get() && !hasLineOfSight) {
+                    continue; // can't see the target through blocks
+                }
                 if (friendlyFire && !LineOfFire.clear(mob, t, e.safetyRadius(), adapter)) {
-                    continue; // an ally is in the line of fire / blast radius
+                    continue; // an ally or protected bystander is in the line of fire / blast radius
                 }
             }
             castable.add(r);

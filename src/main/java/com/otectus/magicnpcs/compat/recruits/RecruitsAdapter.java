@@ -17,15 +17,39 @@ import net.minecraft.world.entity.Mob;
  */
 public final class RecruitsAdapter implements NpcAdapter {
 
+    /** Recruits command state for "passive" (flee / do not fight) — recruits in it should not cast. */
+    private static final int STATE_PASSIVE = 3;
+
+    @Override
+    public int priority() {
+        return 100; // beat the generic owner/team adapter when a recruit is also Ownable
+    }
+
     @Override
     public boolean appliesTo(Mob mob) {
         return mob instanceof AbstractRecruitEntity && MagicNpcsConfig.RECRUITS_INTEGRATION_ENABLED.get();
     }
 
     @Override
+    public boolean canCastNow(Mob mob) {
+        // Respect the Recruits command system: a recruit ordered to a passive/flee
+        // state must not spell-spam. Aggressive/neutral/raid states may cast.
+        return ((AbstractRecruitEntity) mob).getState() != STATE_PASSIVE;
+    }
+
+    @Override
     public double manaScale(Mob mob) {
-        int level = Math.max(0, ((AbstractRecruitEntity) mob).getXpLevel());
-        return 1.0 + level * MagicNpcsConfig.RECRUITS_MANA_PER_LEVEL.get();
+        return 1.0 + level(mob) * MagicNpcsConfig.RECRUITS_MANA_PER_LEVEL.get();
+    }
+
+    @Override
+    public int level(Mob mob) {
+        return Math.max(0, ((AbstractRecruitEntity) mob).getXpLevel());
+    }
+
+    @Override
+    public boolean schoolAssignable(Mob mob) {
+        return true; // recruits are progression NPCs — eligible for the recruit school branch
     }
 
     @Override
