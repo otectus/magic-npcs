@@ -1,6 +1,7 @@
 package com.otectus.magicnpcs.integration.irons;
 
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
+import com.otectus.magicnpcs.core.SchoolData;
 import com.otectus.magicnpcs.core.adapter.NpcAdapter;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
 import com.otectus.magicnpcs.core.loadout.LoadoutEntry;
@@ -103,7 +104,16 @@ public class NpcSpellAttackGoal extends Goal {
         if (!adapter.canCastNow(mob)) {
             return false;
         }
-        return !MagicNpcsConfig.REQUIRE_SPELL_FOCUS.get() || IronsBridge.holdsSpellFocus(mob);
+        if (!MagicNpcsConfig.REQUIRE_SPELL_FOCUS.get() || IronsBridge.holdsSpellFocus(mob)) {
+            return true;
+        }
+        // School-aware focus: a school-assigned caster may instead hold a focus for its own
+        // Iron's school (the per-school irons_spellbooks:<school>_focus tag).
+        if (MagicNpcsConfig.SCHOOLS_SCHOOL_AWARE_FOCUS.get()) {
+            ResourceLocation school = SchoolData.getSchool(mob);
+            return school != null && IronsBridge.holdsSchoolFocus(mob, school);
+        }
+        return false;
     }
 
     @Override

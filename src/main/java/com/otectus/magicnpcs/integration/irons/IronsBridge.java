@@ -4,9 +4,11 @@ import com.otectus.magicnpcs.MagicNpcs;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import io.redspace.ironsspellbooks.api.magic.MagicData;
 import io.redspace.ironsspellbooks.api.registry.AttributeRegistry;
+import io.redspace.ironsspellbooks.api.registry.SchoolRegistry;
 import io.redspace.ironsspellbooks.api.registry.SpellRegistry;
 import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
 import io.redspace.ironsspellbooks.api.spells.CastSource;
+import io.redspace.ironsspellbooks.api.spells.SchoolType;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
@@ -37,6 +39,27 @@ public final class IronsBridge {
     public static boolean holdsSpellFocus(LivingEntity caster) {
         return caster.getItemInHand(InteractionHand.MAIN_HAND).is(SPELL_FOCUSES)
                 || caster.getItemInHand(InteractionHand.OFF_HAND).is(SPELL_FOCUSES);
+    }
+
+    /**
+     * @return true if the caster holds, in either hand, an item that is a focus for the
+     *         given Iron's school (Iron's {@code SchoolType.isFocus}, backed by per-school
+     *         {@code irons_spellbooks:<school>_focus} item tags). Backs the optional
+     *         {@code schools.schoolAwareFocus} relaxation of the held-focus requirement.
+     */
+    public static boolean holdsSchoolFocus(LivingEntity caster, ResourceLocation schoolId) {
+        SchoolType school = SchoolRegistry.getSchool(schoolId);
+        if (school == null) {
+            return false;
+        }
+        return school.isFocus(caster.getItemInHand(InteractionHand.MAIN_HAND))
+                || school.isFocus(caster.getItemInHand(InteractionHand.OFF_HAND));
+    }
+
+    /** @return the Iron's per-school focus item tag for {@code schoolId}, or {@code null} if unknown. */
+    public static TagKey<Item> schoolFocusTag(ResourceLocation schoolId) {
+        SchoolType school = SchoolRegistry.getSchool(schoolId);
+        return school == null ? null : school.getFocus();
     }
 
     /** Resolve a loadout spell id to an Iron's spell, or {@code null} if unknown/unregistered. */

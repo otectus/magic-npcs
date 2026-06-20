@@ -1,0 +1,34 @@
+{
+  "entity_type": "guardvillagers:guard",
+  "mana_regen": 9.0,
+  "max_mana": 110.0,
+  "spells": [
+    {
+      "level": 1,
+      "max_range": 18.0,
+      "min_range": 0.0,
+      "role": "attack",
+      "safety_radius": 1.0,
+      "spell": "irons_spellbooks:magic_missile",
+      "weight": 3
+    },
+    {
+      "level": 1,
+      "max_range": 22.0,
+      "min_range": 4.0,
+      "role": "attack",
+      "safety_radius": 1.0,
+      "spell": "irons_spellbooks:guiding_bolt",
+      "weight": 2
+    },
+    {
+      "level": 1,
+      "max_range": 20.0,
+      "min_range": 0.0,
+      "role": "support",
+      "safety_radius": 1.5,
+      "spell": "irons_spellbooks:heal",
+      "weight": 1
+    }
+  ]
+}

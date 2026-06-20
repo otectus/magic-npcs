@@ -36,6 +36,39 @@ spellcaster, with first-class support for **Villager Recruits** and a per-NPC
   rules, a spell allow/deny list, equipment requirements, per-mod compat toggles, and
   the full magic-school system. Optionally, recruits can use Iron's *own* combat AI.
 
+## Make any mob a spellcaster (datapacks)
+
+Magic NPCs is datapack-driven: drop a small JSON naming an entity type and a list of
+Iron's spells, and that mob casts them. A complete, minimal pack is two files under
+`<world>/datapacks/my_magic/`:
+
+**`pack.mcmeta`** — for 1.20.1, `pack_format` is **15**:
+
+```json
+{ "pack": { "pack_format": 15, "description": "My Magic NPCs loadouts" } }
+```
+
+**`data/my_magic/spellcasters/skeleton.json`**:
+
+```json
+{
+  "entity_type": "minecraft:skeleton",
+  "max_mana": 100,
+  "mana_regen": 10,
+  "spells": [
+    { "spell": "irons_spellbooks:magic_missile", "level": 1, "weight": 3, "max_range": 16.0, "role": "attack" },
+    { "spell": "irons_spellbooks:heal", "level": 1, "role": "support" }
+  ]
+}
+```
+
+Run `/reload` and skeletons now sling Magic Missiles (and heal when hurt). Each spell
+also accepts `min_range`/`max_range`, `safety_radius` (friendly-fire clearance — larger for
+AoE spells), and `role` (`attack` or `support`). Add `"profession": "minecraft:cleric"` to
+scope a villager loadout to a single profession. The full guide — annotated multi-spell
+examples, modded mobs, the spell-focus tag, and explicit-loadouts vs. magic-schools — is in
+the README and `docs/loadouts/`.
+
 ## Requirements
 
 - **Forge 47.4.0+** for Minecraft **1.20.1**

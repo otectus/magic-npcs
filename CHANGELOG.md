@@ -3,6 +3,52 @@
 All notable changes to Magic NPCs are documented here. Versions follow
 `MAJOR.MINOR.PATCH`; this is a pre-1.0 line.
 
+## [0.3.0] — review fixes, completed deferred systems & datapack docs
+
+An independent review pass: correctness fixes, four previously-deferred systems
+implemented, and a full datapack authoring guide. Builds green; `runData` and the offline
+`bootSanity` GameTest pass. Runtime casting is unchanged from the proven 0.1.1 path.
+
+### Added
+- **Data generation** (`./gradlew runData`): the shipped loadouts and the
+  `magicnpcs:spell_focuses` tag are now generated from Java (single source of truth) into
+  `src/generated/resources`. The focus tag includes Iron's `#irons_spellbooks:school_focus`
+  by default, so `requireSpellFocus` works out-of-the-box when Iron's is installed.
+- **Profession-scoped loadouts:** a loadout may declare an optional `profession` to apply to
+  only villagers of that profession (multiple loadouts per entity type; a profession-less one
+  is the fallback). See `docs/loadouts/`.
+- **School-aware spell focus** (`schools.schoolAwareFocus`, previously inert): with
+  `requireSpellFocus` on, a school caster may satisfy it by holding a focus for its own Iron's
+  school (the per-school `irons_spellbooks:<school>_focus` tag); spawn-with-gear prefers a
+  school-appropriate focus.
+- **Runtime casting GameTests** (`skeletonCastsMagicMissile`, `recruitCasts`,
+  `recruitCastsWithIronsAi`): assert a real cast (mana spent) in a full Iron's runtime; they
+  skip cleanly offline so `bootSanity` stays green.
+- **Datapack authoring guide** in the README (complete pack skeleton with `pack_format` 15, an
+  annotated multi-spell example, modded-mob and profession examples, the spell-focus tag, and
+  explicit-loadout-vs-magic-school guidance) plus a datapack example in the CurseForge description.
+
+### Fixed
+- **`/magicnpcs school clear` and the Tome's sneak-clear are now sticky:** they mark the NPC a
+  non-caster instead of resetting it, so it no longer re-rolls into a caster on the next chunk
+  reload.
+- **School re-assign/clear now removes the Iron's-AI goal too:** with `recruits.useIronsAI=true`,
+  re-assigning or clearing a school via the command/Tome no longer leaves a stale/duplicate
+  `WizardAttackGoal`.
+- A villager whose rolled school yields no castable spells is now marked a non-caster instead of
+  re-rolling (and re-failing) every join.
+- Loadout numeric fields are clamped on load, and an invalid `role` reports a clear error.
+
+### Changed
+- Loadouts load as a list per entity type (to support `profession`); behaviour for existing
+  profession-less loadouts is unchanged.
+
+### Notes
+- `recruits.useIronsAI` (off by default) delegates targeting/fleeing to Iron's, so the built-in
+  line-of-sight, friendly-fire, Peaceful, and spell-focus gates do not apply in that mode (the
+  cast still uses Magic NPCs' mana economy).
+- Iron's Spells 'n Spellbooks and Villager Recruits remain compile-only soft dependencies.
+
 ## [0.2.0] — NPC compatibility, hardening & magic schools
 
 A broad release-readiness pass plus a new per-NPC magic-school system. Builds green

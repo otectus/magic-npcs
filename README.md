@@ -32,6 +32,9 @@ Ships curated combat loadouts for `recruit`, `bowman`, `crossbowman`, and `capta
 Optionally (config `recruits.useIronsAI`, default off), recruits use Iron's *own*
 combat AI (`WizardAttackGoal`: distance-aware selection, fleeing) via a Mixin that
 makes them `IMagicEntity`; the actual cast still routes through the proven path above.
+In this mode selection/fleeing are Iron's, so the built-in **line-of-sight, friendly-fire,
+Peaceful, and spell-focus gates do not apply** (the cast still goes through Magic NPCs'
+mana economy). Leave it off if you rely on those safety gates.
 
 ## Dependencies
 
@@ -46,9 +49,34 @@ makes them `IMagicEntity`; the actual cast still routes through the proven path 
 
 Magic NPCs **does not bundle** Iron's or Recruits — install them yourself.
 
-## Datapack loadout schema
+## Datapacks: make any mob a spellcaster
 
-`data/<namespace>/spellcasters/<anything>.json`:
+A mob becomes a caster when a **loadout** JSON exists for its entity type. No code, no
+tags — just a small data file you can drop into any datapack.
+
+### 1. Where the files go
+
+A datapack lives in `<world>/datapacks/<your_pack>/`. The minimum is two files:
+
+```
+<world>/datapacks/my_magic/
+├── pack.mcmeta
+└── data/
+    └── my_magic/                 ← any namespace you like
+        └── spellcasters/
+            └── elite_wizard.json ← any file name you like
+```
+
+`pack.mcmeta` (Minecraft **1.20.1 → `pack_format` 15**):
+
+```json
+{ "pack": { "pack_format": 15, "description": "My Magic NPCs loadouts" } }
+```
+
+Then run `/reload` (or rejoin the world); `/datapack list` confirms it loaded. The
+loadout's **`entity_type`** is what matters — not the file name or namespace.
+
+### 2. The loadout, field by field
 
 ```json
 {
@@ -56,15 +84,8 @@ Magic NPCs **does not bundle** Iron's or Recruits — install them yourself.
   "max_mana": 100,
   "mana_regen": 10,
   "spells": [
-    {
-      "spell": "irons_spellbooks:magic_missile",
-      "level": 1,
-      "weight": 3,
-      "min_range": 0.0,
-      "max_range": 16.0,
-      "safety_radius": 1.0,
-      "role": "attack"
-    },
+    { "spell": "irons_spellbooks:magic_missile", "level": 1, "weight": 3,
+      "min_range": 0.0, "max_range": 16.0, "safety_radius": 1.0, "role": "attack" },
     { "spell": "irons_spellbooks:heal", "level": 1, "role": "support" }
   ]
 }
@@ -72,7 +93,8 @@ Magic NPCs **does not bundle** Iron's or Recruits — install them yourself.
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `entity_type` | — | target entity id (the opt-in; one loadout per type) |
+| `entity_type` | — | target entity id (the opt-in) |
+| `profession` | *(none)* | optional villager profession id — scopes the loadout to one profession (see below) |
 | `max_mana` / `mana_regen` | 100 / 10 | base values for the mob's Iron's mana attributes |
 | `spell` | — | an Iron's spell registry id |
 | `level` | 1 | spell level to cast at |
@@ -81,7 +103,112 @@ Magic NPCs **does not bundle** Iron's or Recruits — install them yourself.
 | `safety_radius` | 1.5 | friendly-fire clearance (blocks); larger for AoE spells |
 | `role` | `attack` | `attack` (aim at the hostile target) or `support` (self-cast when hurt) |
 
-Datapacks override the shipped loadouts — change a mob's spells without touching code.
+### 3. A worked example (annotated)
+
+A multi-spell "battlemage" mixing a ranged nuke, a spammable bolt, and self-healing:
+
+```json
+{
+  "entity_type": "minecraft:vindicator",
+  "max_mana": 140,
+  "mana_regen": 10,
+  "spells": [
+    { "spell": "irons_spellbooks:fireball",      "level": 2, "weight": 1,
+      "min_range": 6.0, "max_range": 24.0, "safety_radius": 4.0, "role": "attack" },
+    { "spell": "irons_spellbooks:magic_missile", "level": 1, "weight": 3,
+      "min_range": 0.0, "max_range": 16.0, "safety_radius": 1.0, "role": "attack" },
+    { "spell": "irons_spellbooks:heal",          "level": 1, "weight": 1, "role": "support" }
+  ]
+}
+```
+
+- **`weight`** sets relative pick odds: `magic_missile` (3) is chosen ~3× as often as
+  `fireball` (1) when both are eligible.
+- **`min_range` / `max_range`** is the engagement window: `fireball` holds until the target
+  is ≥6 blocks away (don't nuke point-blank); `magic_missile` fires from 0–16.
+- **`safety_radius`** is friendly-fire clearance — large (4) for the AoE `fireball`, small (1)
+  for the single-target missile. A cast is **skipped** if an ally/bystander sits inside it.
+- **`role: support`** spells self-cast only when the caster drops below
+  `balance.supportHealthThreshold` (default 50% HP), and ignore range.
+
+### 4. Targeting a modded mob
+
+`entity_type` accepts any registered entity id. JSON has no comments, but Magic NPCs
+ignores unknown keys, so a `__comment` is a handy in-file note:
+
+```json
+{
+  "__comment": "Verify the id with /summon or the mod's registry.",
+  "entity_type": "somemod:dark_knight",
+  "max_mana": 120, "mana_regen": 9,
+  "spells": [ { "spell": "irons_spellbooks:fireball", "level": 2, "role": "attack" } ]
+}
+```
+
+For NPC mods gated behind a `[compat]` toggle (Guard Villagers, MCA, …), also enable that
+toggle — see [Supported NPC mods](#supported-npc-mods). Ready examples live in
+[`docs/loadouts/`](docs/loadouts/README.md).
+
+### 5. Only certain villagers: profession scoping
+
+Add `"profession"` to apply a loadout to **only** villagers of that profession; other
+villagers of the same type are untouched. A profession-less loadout for the same type acts
+as the fallback.
+
+```json
+{
+  "entity_type": "minecraft:villager",
+  "profession": "minecraft:cleric",
+  "max_mana": 90, "mana_regen": 9,
+  "spells": [
+    { "spell": "irons_spellbooks:guiding_bolt", "level": 1, "role": "attack" },
+    { "spell": "irons_spellbooks:heal",         "level": 1, "role": "support" }
+  ]
+}
+```
+
+> Vanilla villagers only actually cast when they have a target (raids, or a guard/NPC mod
+> grants combat AI) — their peaceful behaviour is preserved.
+
+### 6. Explicit loadouts vs. magic schools
+
+Two ways a mob becomes a caster, resolved in this order:
+
+1. **Explicit loadout** (this section) — a hand-tuned, per-type (optionally per-profession)
+   spell list. Always wins when one matches.
+2. **Magic school** — if no loadout matches, recruits/villagers may be auto-assigned an
+   Iron's *school* and have a spell pool built dynamically. See [`docs/schools.md`](docs/schools.md).
+
+Use explicit loadouts for designed encounters; lean on schools for automatic variety.
+
+### 7. Spell focuses (optional)
+
+If you set `equipment.requireSpellFocus = true`, casters must hold an item in the
+`magicnpcs:spell_focuses` item tag. That tag ships pre-filled with Iron's focuses
+(`#irons_spellbooks:school_focus`). Add your own staves/spellbooks from a datapack — tag
+entries merge across packs:
+
+```json
+{
+  "replace": false,
+  "values": [
+    "#irons_spellbooks:school_focus",
+    "yourmod:fancy_staff"
+  ]
+}
+```
+
+Place that at `data/magicnpcs/tags/items/spell_focuses.json` in your pack. With
+`schools.schoolAwareFocus = true`, a school caster may instead hold a focus for **its own**
+school (e.g. an Iron's *fire focus* for a fire NPC).
+
+### 8. See also
+
+- **Shipped loadouts** (great references) — bundled in the jar under
+  `data/magicnpcs/spellcasters/`: `skeleton`, `recruit`, `bowman`, `crossbowman`, `captain`,
+  `guard`. (They are produced by the mod's data generator; same schema as yours.)
+- [`docs/loadouts/README.md`](docs/loadouts/README.md) — copy-paste examples for optional NPC mods.
+- [`docs/schools.md`](docs/schools.md) — the per-NPC magic-school system.
 
 ## Supported NPC mods
 
@@ -128,14 +255,16 @@ Server config `config/magicnpcs-server.toml` (auto-synced to clients):
   `peacefulDisablesCasting`, `difficultyScaling`
 - **targeting** — `requireLineOfSight`, `protectBystanders`, `protectOwners`
 - **equipment** — `requireSpellFocus`, `spawnWithGearChance` (both use the
-  `magicnpcs:spell_focuses` item tag; populate it with staves/spellbooks to use them)
+  `magicnpcs:spell_focuses` item tag, which ships pre-filled with Iron's focuses
+  (`#irons_spellbooks:school_focus`); add your own staves/spellbooks via a datapack)
 - **spells** — `spellBlacklist`, `spellWhitelist`
 - **recruits** — `enabled`, `manaPerLevel`, `useIronsAI`, `ironsAiSpeed`, `ironsAiIntervalTicks`
 - **compat** — per-mod loadout toggles (`guardvillagers`, `mca`, `minecolonies`,
   `easynpc`, `humancompanions`, `morevillagers`, `villagersplus`), all default **off**
 - **schools** — magic-school assignment (`enableSchools`, `allowedSchools`, `maxRarity`,
-  `maxSpellLevel`, `spellsPerSchool`, weighting, base mana…) with `schools.recruits.*`,
-  `schools.villagers.*`, and command/item toggles — see [`docs/schools.md`](docs/schools.md)
+  `maxSpellLevel`, `spellsPerSchool`, weighting, base mana, `schoolAwareFocus`…) with
+  `schools.recruits.*`, `schools.villagers.*`, and command/item toggles — see
+  [`docs/schools.md`](docs/schools.md)
 
 ### Disabling risky integrations
 
@@ -151,7 +280,9 @@ in a large pack: leave all `[compat]` toggles off (the default), keep
 ./gradlew build
 ```
 Produces `build/libs/magicnpcs-<version>.jar` (reobfuscated; ships no third-party
-classes). For an in-dev runtime with Iron's + Recruits, see
+classes). The shipped loadouts + the `spell_focuses` tag are generated (committed under
+`src/generated/resources`); after editing the data providers, regenerate them with
+`./gradlew runData`. For an in-dev runtime with Iron's + Recruits, see
 [`docs/dev-runtime.md`](docs/dev-runtime.md). The Recruits jar belongs in `libs/`
 (see that doc); it is compile-only and never bundled or committed.
 

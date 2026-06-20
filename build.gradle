@@ -35,7 +35,22 @@ minecraft {
             args '--nogui'
             property 'forge.enabledGameTestNamespaces', 'magicnpcs'
         }
+
+        // Data generation (./gradlew runData): writes the shipped loadouts + item tags
+        // to src/generated/resources. Vanilla-only providers, so it runs without Iron's.
+        data {
+            args '--mod', 'magicnpcs', '--all',
+                 '--output', file('src/generated/resources/'),
+                 '--existing', file('src/main/resources/')
+        }
     }
+}
+
+// Generated data (runData output) ships in the jar alongside hand-authored resources.
+// The datagen .cache folder is build metadata only — never ship it.
+sourceSets.main.resources {
+    srcDir 'src/generated/resources'
+    exclude '.cache'
 }
 
 repositories {

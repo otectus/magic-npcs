@@ -214,3 +214,37 @@ generic owner/team/bystander safety), with conservative, default-off, config-gat
 hooks for the broader NPC-mod ecosystem. Build is green, the offline boot test passes,
 resources validate, and there are no leftover stubs. Deep per-mod API integration for
 the remaining 8 mods is deferred pending their development jars and a full runtime.
+
+## 12. 0.3.0 review pass — fixes & completed deferred work
+
+An independent re-review (skeptical of section 3's "all clean") plus completion of several
+deferred items. Net: the core casting code held up — several first-pass "bugs" were false
+positives (`LineOfFire` containment, `SchoolSpellPool` weighted sampling, the goal's
+decision-timer/null-safety) and were confirmed correct by reading the code. The genuine
+findings and their fixes:
+
+- **Fixed — `clearSchool` was not sticky:** `/magicnpcs school clear` and the Tome's
+  sneak-clear reset the NPC to *unrolled*, so it re-rolled into a caster on the next chunk
+  reload. Now marks a sticky non-caster.
+- **Fixed — school re-assign/clear ignored `WizardAttackGoal`:** with `recruits.useIronsAI`,
+  re-assign/clear left a stale/duplicate Iron's goal. The removal predicate now matches
+  `hasSpellGoal` (both goal types).
+- **Fixed — empty school roll churn:** a fresh roll yielding no castable spells now marks a
+  non-caster instead of re-rolling/re-failing each join.
+- **Hardened — loadout parse:** numeric fields clamped; invalid `role` gives a clear message.
+- **Removed cruft:** stray `Microsoft.Services.Store.winmd`.
+
+Completed from §10 "Future recommendations":
+- **#2 Profession-aware loadouts (explicit):** loadouts now take an optional `profession`
+  field (multiple loadouts per type; profession-less fallback). *(Magical trade/loot
+  injection — the other half of the original item — remains future work.)*
+- **#3 Datagen:** `GatherDataEvent` generates the shipped loadouts + the `spell_focuses` tag
+  (`runData` → `src/generated/resources`); the tag now defaults to Iron's `#school_focus`.
+- **#4 Runtime GameTests:** the three casting scenarios are implemented (Iron's-gated; skip
+  offline). They run — but are not yet *verified* — in a full runtime here.
+
+Also implemented `schools.schoolAwareFocus` (previously a defined-but-unread config option):
+it now accepts an Iron's per-school focus (`SchoolType.isFocus`) when `requireSpellFocus` is on.
+
+**Still deferred (need external jars/assets):** compiled per-mod adapters (§10 #1), GeckoLib
+cast animations, and magical trade/loot injection.

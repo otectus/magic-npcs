@@ -18,12 +18,11 @@ are documented from public sources and **must be verified for your exact version
 
 ## Known limitations
 
-- **Profession-scoped casting (More Villagers / VillagersPlus):** loadouts key on
-  *entity type*, and these mods add professions to the vanilla `minecraft:villager`
-  type — so a loadout cannot target only "the cleric profession." Targeting
-  `minecraft:villager` would make *every* villager a caster, which is why no default
-  villager loadout ships. Profession-aware loadouts and magical trade injection are
-  future work.
+- **Profession-scoped casting (vanilla, More Villagers / VillagersPlus):** loadouts key on
+  *entity type*, and these mods add professions to the vanilla `minecraft:villager` type.
+  Use the optional **`profession`** field (see the example at the bottom) to target a single
+  profession instead of *every* villager — which is why no blanket villager loadout ships.
+  (Magical trade/loot injection remains future work.)
 - **MCA Reborn:** MCA villagers share entity types (`mca:male` / `mca:female`) across
   all roles, so a loadout makes *all* of them cast. Only enable `compat.mca` if you
   truly want that, and prefer pairing it with a tight `spellWhitelist`.
@@ -89,3 +88,24 @@ owner/team adapter (`targeting.protectOwners`).
   ]
 }
 ```
+
+### Profession-scoped villager — only clerics cast
+Add the optional **`profession`** field (a villager-profession id) so the loadout applies to
+just that profession; villagers of other professions are untouched. A profession-less
+`minecraft:villager` loadout, if present, is the fallback for everyone else. No `[compat]`
+toggle is needed — this is vanilla.
+```json
+{
+  "entity_type": "minecraft:villager",
+  "profession": "minecraft:cleric",
+  "max_mana": 90,
+  "mana_regen": 9,
+  "spells": [
+    { "spell": "irons_spellbooks:guiding_bolt", "level": 1, "weight": 2, "max_range": 20.0, "role": "attack" },
+    { "spell": "irons_spellbooks:heal", "level": 1, "weight": 1, "role": "support" }
+  ]
+}
+```
+Villagers only cast when they have a target (raids, or a guard mod grants combat AI), so a
+cleric battlemage stays peaceful until a raid hits. For modded professions, use that mod's
+profession id (e.g. `morevillagers:fisherman`).

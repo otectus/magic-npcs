@@ -1,9 +1,0 @@
-{
-  "entity_type": "recruits:crossbowman",
-  "max_mana": 100,
-  "mana_regen": 8,
-  "spells": [
-    { "spell": "irons_spellbooks:lightning_bolt", "level": 1, "weight": 2, "min_range": 4.0, "max_range": 24.0, "safety_radius": 1.5, "role": "attack" },
-    { "spell": "irons_spellbooks:icicle", "level": 1, "weight": 2, "min_range": 0.0, "max_range": 20.0, "safety_radius": 1.0, "role": "attack" }
-  ]
-}

@@ -1,5 +1,7 @@
 package com.otectus.magicnpcs.gametest;
 
+import com.otectus.magicnpcs.compat.IronsCompat;
+import com.otectus.magicnpcs.integration.irons.IronsCastingTests;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraftforge.gametest.GameTestHolder;
@@ -20,12 +22,12 @@ import net.minecraftforge.gametest.PrefixGameTestTemplate;
  * <p>{@link #bootSanity} runs on the shipped {@code platform} structure template
  * ({@code data/magicnpcs/structures/platform.nbt}) and passes offline.
  *
- * <p>The casting scenarios below need the full runtime (Iron's + Curios +
- * PlayerAnimator, and Recruits for the recruit cases) which is not present in the
- * dev environment — see {@code docs/dev-runtime.md}. They are documented here as the
- * manual acceptance checks to run in a production instance: spawn the mob + a target
- * on a structure template and assert the observed effect (projectile spawned, mana
- * dropped, ally spared) via {@link GameTestHelper}.
+ * <p>The casting scenarios below ({@link #skeletonCastsMagicMissile}, {@link #recruitCasts},
+ * {@link #recruitCastsWithIronsAi}) need the full runtime (Iron's + Curios + PlayerAnimator,
+ * and Recruits for the recruit cases), which is not present in the dev environment — see
+ * {@code docs/dev-runtime.md}. Each is gated on {@link IronsCompat#isLoaded()} and succeeds
+ * immediately (skips) when Iron's is absent, so the offline run stays green; with the full
+ * runtime they spawn the mob + a target and assert that mana is spent on a real cast.
  */
 @GameTestHolder("magicnpcs")
 @PrefixGameTestTemplate(false)
@@ -40,12 +42,41 @@ public final class MagicNpcsGameTests {
         helper.succeed();
     }
 
-    // --- Runtime acceptance checks (require Iron's + companions; run in production) ---
+    // --- Runtime casting checks (require Iron's; recruit cases also require Recruits) ---
     //
-    // 1. Spawn a skeleton (has a shipped loadout) + a target; tick; a Magic Missile
-    //    projectile spawns and the skeleton's mana drops, then refills over time.
-    // 2. Spawn a recruit, its owner, and a hostile; the recruit casts at the hostile,
-    //    never at the owner/ally (shouldAttack gate + line-of-fire / bystander check).
-    // 3. With recruits.useIronsAI=true, a recruit drives Iron's WizardAttackGoal
-    //    (varies spell by distance); with it false, the built-in goal.
+    // Each guards on IronsCompat.isLoaded() and, only then, delegates to the Iron's-side
+    // IronsCastingTests (lazily classloaded, so the offline run never touches Iron's). Without
+    // Iron's they succeed immediately (skip); with the full runtime they assert real casts.
+    // Marked required=false so a runtime-specific flake never fails the whole suite; the
+    // offline boot gate (bootSanity) stays required.
+
+    /** Universal path: a skeleton with the shipped loadout spends mana casting at a target. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void skeletonCastsMagicMissile(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.skeletonCastsMagicMissile(helper);
+    }
+
+    /** Adapter path: a Villager Recruit casts (skips if Recruits is absent). */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void recruitCasts(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.recruitCasts(helper);
+    }
+
+    /** Iron's-AI path: a recruit driven by Iron's WizardAttackGoal (via the mixin) casts. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void recruitCastsWithIronsAi(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.recruitCastsWithIronsAi(helper);
+    }
 }

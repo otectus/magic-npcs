@@ -47,16 +47,19 @@ path — fully offline:
 ```
 
 A headless gametest server launches and **loads the mod** — the boot log line
-`main … Magic NPCs … magicnpcs … 0.1.0 … DONE` (followed by "Started game test
+`main … Magic NPCs … magicnpcs … 0.3.0 … DONE` (followed by "Started game test
 server") proves `mods.toml` is valid, the mixin config loads without crashing when
 its targets are absent (plugin gate → skip), the config registers, and the
 "Iron's absent → disabled, no crash" path holds. (This is verified.)
 
-The `@GameTest` bodies themselves need a structure template (`platform`), which is
-authored in-game via a structure block and exported to
-`data/magicnpcs/structures/`; until one is added, the run reports a missing
-structure *after* the successful boot. The boot is the offline-verifiable part; the
-structure-backed casting assertions belong to the full-runtime pass below.
+`bootSanity` runs on the shipped `platform` structure
+(`data/magicnpcs/structures/platform.nbt`) and passes offline. The three casting
+GameTests (`skeletonCastsMagicMissile`, `recruitCasts`, `recruitCastsWithIronsAi`) are
+gated on `IronsCompat.isLoaded()` and **succeed immediately (skip) when Iron's is absent**,
+so the offline run stays green; their real assertions — spawn the mob + a target, then
+assert mana is spent on a cast — run only in the full runtime below (and the recruit cases
+also need Recruits). They are marked `required = false`, so a runtime-specific flake never
+fails the suite.
 
 ## In-game test (full casting — needs the runtime above)
 
@@ -88,8 +91,8 @@ resolves + loads, and Magic NPCs + its mixin config load cleanly.
 Everything must be in production/SRG space for Iron's mixins to work, so run the **built
 jar** in a real Forge 1.20.1 (47.4.0+) instance — the normal end-user flow:
 
-1. `./gradlew build` → `build/libs/magicnpcs-0.1.0.jar`.
-2. Into a Forge **47.4.16** client/server `mods/` folder, drop `magicnpcs-0.1.0.jar` + the
+1. `./gradlew build` → `build/libs/magicnpcs-0.3.0.jar`.
+2. Into a Forge **47.4.16** client/server `mods/` folder, drop `magicnpcs-0.3.0.jar` + the
    **production** jars for Iron's `1.20.1-3.15.x`, **GeckoLib 4.8.3 (forge)**, **Curios
    5.14.1+1.20.1**, **PlayerAnimator 1.0.2-rc1+1.20**, and (optional) **Recruits 1.15.0**.
    (`libs/geckolib-4.8.3.jar` and `libs/recruits-1.20.1-1.15.0.jar` are already the

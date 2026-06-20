@@ -16,12 +16,14 @@ import io.redspace.ironsspellbooks.capabilities.magic.MagicManager;
 import io.redspace.ironsspellbooks.entity.mobs.goals.WizardAttackGoal;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.tags.TagKey;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.goal.WrappedGoal;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.Item;
@@ -71,7 +73,7 @@ public class IronsSpellcasterHandler {
             return; // already injected (e.g. chunk reload)
         }
         ResourceLocation typeId = EntityType.getKey(mob.getType());
-        SpellcasterLoadout loadout = LoadoutManager.get(typeId);
+        SpellcasterLoadout loadout = LoadoutManager.resolve(mob);
         if (loadout != null) {
             if (!MagicNpcsConfig.isLoadoutEnabledFor(typeId)) {
                 if (MagicNpcsConfig.DEBUG_LOGGING.get() && MagicNpcsConfig.ownerModLoaded(typeId)) {
@@ -121,6 +123,7 @@ public class IronsSpellcasterHandler {
             return null;
         }
         ResourceLocation schoolId = SchoolData.getSchool(mob);
+        boolean freshRoll = false;
         if (schoolId == null) {
             if (SchoolData.hasRolled(mob)) {
                 return null; // sticky non-caster
@@ -129,12 +132,20 @@ public class IronsSpellcasterHandler {
             if (schoolId == null) {
                 return null;
             }
+            freshRoll = true;
         }
         SchoolType school = SchoolRegistry.getSchool(schoolId);
         if (school == null) {
             return null; // school not present in this Iron's build
         }
-        return SchoolSpellPool.buildLoadout(school, mob);
+        SpellcasterLoadout loadout = SchoolSpellPool.buildLoadout(school, mob);
+        if (loadout == null && freshRoll) {
+            // The rolled school yields no castable spells under the current caps/filters —
+            // mark non-caster so we don't re-roll (and re-fail) every join and so the tick
+            // handler stops treating this mob as a school caster.
+            SchoolData.markNonCaster(mob);
+        }
+        return loadout;
     }
 
     /** Eligibility + caster-chance roll; persists the outcome. Returns the chosen school or null. */
@@ -234,15 +245,20 @@ public class IronsSpellcasterHandler {
             return false;
         }
         SchoolData.set(mob, schoolId);
-        mob.goalSelector.removeAllGoals(g -> g instanceof NpcSpellAttackGoal);
+        mob.goalSelector.removeAllGoals(IronsSpellcasterHandler::isOurSpellGoal);
         applyLoadout(mob, loadout);
         return true;
     }
 
-    /** Clear a mob's assigned school and remove its casting goal. */
+    /**
+     * Mark a mob as a sticky non-caster and remove its casting goal. "Clear" means
+     * "stop casting" and must persist — using {@link SchoolData#markNonCaster} (not
+     * {@code clear}) keeps it from re-rolling into a caster on the next chunk reload.
+     * Re-enable later via {@code set}/{@code reroll}/the Tome, which overwrite the mark.
+     */
     public static void clearSchool(Mob mob) {
-        SchoolData.clear(mob);
-        mob.goalSelector.removeAllGoals(g -> g instanceof NpcSpellAttackGoal);
+        SchoolData.markNonCaster(mob);
+        mob.goalSelector.removeAllGoals(IronsSpellcasterHandler::isOurSpellGoal);
     }
 
     @SubscribeEvent
@@ -252,7 +268,7 @@ public class IronsSpellcasterHandler {
                 || !(event.getEntity() instanceof Mob mob)) {
             return;
         }
-        SpellcasterLoadout loadout = LoadoutManager.get(EntityType.getKey(mob.getType()));
+        SpellcasterLoadout loadout = LoadoutManager.resolve(mob);
         boolean schoolCaster = loadout == null
                 && MagicNpcsConfig.SCHOOLS_ENABLED.get()
                 && SchoolData.getSchool(mob) != null;
@@ -305,13 +321,26 @@ public class IronsSpellcasterHandler {
         if (mob.getRandom().nextDouble() >= chance) {
             return;
         }
-        BuiltInRegistries.ITEM.getTag(IronsBridge.SPELL_FOCUSES).ifPresent(holders -> {
+        BuiltInRegistries.ITEM.getTag(preferredFocusTag(mob)).ifPresent(holders -> {
             if (holders.size() == 0) {
                 return;
             }
             Item item = holders.get(mob.getRandom().nextInt(holders.size())).value();
             mob.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(item));
         });
+    }
+
+    /** Prefer the caster's school focus tag when school-aware focus is on and it has items; else the generic tag. */
+    private static TagKey<Item> preferredFocusTag(Mob mob) {
+        if (MagicNpcsConfig.SCHOOLS_SCHOOL_AWARE_FOCUS.get()) {
+            ResourceLocation school = SchoolData.getSchool(mob);
+            TagKey<Item> schoolTag = school == null ? null : IronsBridge.schoolFocusTag(school);
+            if (schoolTag != null
+                    && BuiltInRegistries.ITEM.getTag(schoolTag).map(h -> h.size() > 0).orElse(false)) {
+                return schoolTag;
+            }
+        }
+        return IronsBridge.SPELL_FOCUSES;
     }
 
     private static void rescaleMaxMana(Mob mob, double baseMana) {
@@ -327,10 +356,15 @@ public class IronsSpellcasterHandler {
 
     private static boolean hasSpellGoal(Mob mob) {
         for (WrappedGoal wrapped : mob.goalSelector.getAvailableGoals()) {
-            if (wrapped.getGoal() instanceof NpcSpellAttackGoal || wrapped.getGoal() instanceof WizardAttackGoal) {
+            if (isOurSpellGoal(wrapped.getGoal())) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** Any casting goal we may have injected: the built-in goal or Iron's own (useIronsAI). */
+    private static boolean isOurSpellGoal(Goal goal) {
+        return goal instanceof NpcSpellAttackGoal || goal instanceof WizardAttackGoal;
     }
 }

@@ -30,10 +30,12 @@ automatically.
    - `set @e[type=recruits:recruit,distance=..10] irons_spellbooks:fire`
    - `info @e[...]` — show each target's assignment
    - `reroll @e[...]` — assign a fresh random allowed school
-   - `clear @e[...]` — remove the assignment and casting goal
+   - `clear @e[...]` — stop casting: marks the NPC a **sticky non-caster** and removes the
+     casting goal, so it won't auto re-roll on the next chunk reload. Re-enable later with
+     `set`/`reroll` or the Tome.
 3. **School Tome item** (`magicnpcs:school_tome`, in the Tools & Utilities creative
    tab): right-click an NPC to cycle to the next allowed school; sneak-right-click to
-   clear. Toggle with `schools.item`.
+   clear (the same sticky non-caster mark as the command). Toggle with `schools.item`.
 
 ## Spell pool filters (`[schools]`)
 
@@ -42,9 +44,9 @@ A school's pool is `SpellRegistry.getSpellsForSchool(school)` filtered by:
 - rarity ≤ `maxRarity`; spell level ≤ `maxSpellLevel`;
 - the global `spellBlacklist` / `spellWhitelist`.
 Up to `spellsPerSchool` are sampled (weighted by `weightingMode`). Spells in
-`supportSpellIds` (or matching heal/cure/blessing/regen/haste/shield/ward) become
-SUPPORT (self-cast when hurt); the rest are ATTACK. Mana comes from `baseMaxMana` /
-`baseManaRegen` (then scaled by recruit rank, `manaMultiplier`, and difficulty).
+`supportSpellIds` (or whose name matches heal/cure/blessing/regen/haste/shield/ward/
+fortify/wisp) become SUPPORT (self-cast when hurt); the rest are ATTACK. Mana comes from
+`baseMaxMana` / `baseManaRegen` (then scaled by recruit rank, `manaMultiplier`, and difficulty).
 
 ## Disabling
 
@@ -62,3 +64,8 @@ SUPPORT (self-cast when hurt); the rest are ATTACK. Mana comes from `baseMaxMana
   professions use their own ids — add them to `professionSchools`.
 - An assigned school whose `SchoolType` isn't present in the installed Iron's build
   simply produces no caster (fails safe).
+- **School-aware focus:** with `equipment.requireSpellFocus` on, set
+  `schools.schoolAwareFocus = true` to let a school caster satisfy the focus requirement by
+  holding a focus for its **own** school (Iron's per-school `irons_spellbooks:<school>_focus`
+  tag), in addition to the generic `magicnpcs:spell_focuses` tag. Spawn-with-gear then
+  prefers a school-appropriate focus too.

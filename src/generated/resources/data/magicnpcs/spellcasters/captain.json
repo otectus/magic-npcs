@@ -1,0 +1,34 @@
+{
+  "entity_type": "recruits:captain",
+  "mana_regen": 10.0,
+  "max_mana": 140.0,
+  "spells": [
+    {
+      "level": 2,
+      "max_range": 24.0,
+      "min_range": 6.0,
+      "role": "attack",
+      "safety_radius": 4.0,
+      "spell": "irons_spellbooks:fireball",
+      "weight": 2
+    },
+    {
+      "level": 1,
+      "max_range": 20.0,
+      "min_range": 0.0,
+      "role": "support",
+      "safety_radius": 1.5,
+      "spell": "irons_spellbooks:haste",
+      "weight": 1
+    },
+    {
+      "level": 1,
+      "max_range": 20.0,
+      "min_range": 0.0,
+      "role": "support",
+      "safety_radius": 1.5,
+      "spell": "irons_spellbooks:heal",
+      "weight": 1
+    }
+  ]
+}
