@@ -102,6 +102,12 @@ loadout's **`entity_type`** is what matters — not the file name or namespace.
 | `min_range` / `max_range` | 0 / 20 | target distance window (blocks) for `attack` spells |
 | `safety_radius` | 1.5 | friendly-fire clearance (blocks); larger for AoE spells |
 | `role` | `attack` | `attack` (aim at the hostile target) or `support` (self-cast when hurt) |
+| `cast_chance` | *(global `castChance`)* | optional [0..1] chance to actually cast on each decision (a "hesitation") |
+| `cooldown` | *(none)* | optional explicit cooldown in ticks; overrides the multiplier path (floored by `minCooldownTicks`) |
+| `cooldown_multiplier` | *(global `cooldownMultiplier`)* | optional per-spell cooldown multiplier (ignored if `cooldown` is set) |
+| `windup` | *(global `castWindupTicks`)* | optional aim wind-up in ticks before this attack spell fires |
+
+The last four fields are optional; omit them to inherit the matching global config default.
 
 ### 3. A worked example (annotated)
 
@@ -251,9 +257,9 @@ Server config `config/magicnpcs-server.toml` (auto-synced to clients):
 
 - **general** — `enableSpellcasting`, `debugLogging`
 - **balance** — `manaMultiplier`, `cooldownMultiplier`, `regenMultiplier`,
-  `decisionIntervalTicks`, `supportHealthThreshold`, `friendlyFireCheck`,
-  `peacefulDisablesCasting`, `difficultyScaling`
-- **targeting** — `requireLineOfSight`, `protectBystanders`, `protectOwners`
+  `decisionIntervalTicks`, `castChance`, `minCooldownTicks`, `supportHealthThreshold`,
+  `friendlyFireCheck`, `peacefulDisablesCasting`, `difficultyScaling`
+- **targeting** — `requireLineOfSight`, `castWindupTicks`, `protectBystanders`, `protectOwners`
 - **equipment** — `requireSpellFocus`, `spawnWithGearChance` (both use the
   `magicnpcs:spell_focuses` item tag, which ships pre-filled with Iron's focuses
   (`#irons_spellbooks:school_focus`); add your own staves/spellbooks via a datapack)

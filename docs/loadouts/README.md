@@ -109,3 +109,32 @@ toggle is needed — this is vanilla.
 Villagers only cast when they have a target (raids, or a guard mod grants combat AI), so a
 cleric battlemage stays peaceful until a raid hits. For modded professions, use that mod's
 profession id (e.g. `morevillagers:fisherman`).
+
+### Per-spell pacing & aim (optional)
+
+Any spell entry accepts optional tuning fields; omit them to inherit the global config
+defaults under `[balance]` / `[targeting]`:
+
+- **`cast_chance`** `[0..1]` — chance to actually cast on each decision (a "hesitation").
+- **`cooldown`** — explicit cooldown in ticks (overrides the multiplier; floored by
+  `minCooldownTicks`). Or **`cooldown_multiplier`** to scale the spell's Iron's cooldown.
+- **`windup`** — ticks the caster spends facing/tracking the target before an attack spell
+  fires (re-checking line of sight/range; it only fires if the target is still valid).
+  `0` casts instantly.
+
+```json
+{
+  "entity_type": "minecraft:wither_skeleton",
+  "max_mana": 160,
+  "mana_regen": 10,
+  "spells": [
+    { "spell": "irons_spellbooks:fireball", "level": 2, "weight": 2,
+      "min_range": 6.0, "max_range": 24.0, "safety_radius": 4.0, "role": "attack",
+      "cast_chance": 0.6, "cooldown": 120, "windup": 20 },
+    { "spell": "irons_spellbooks:magic_missile", "level": 1, "weight": 3,
+      "min_range": 0.0, "max_range": 20.0, "role": "attack" }
+  ]
+}
+```
+Here the fireball is a telegraphed, occasional heavy hit (1 s wind-up, 6 s cooldown, 60%
+chance); the magic missile omits the fields and inherits the global defaults.
