@@ -5,22 +5,26 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.otectus.magicnpcs.MagicNpcs;
+import com.otectus.magicnpcs.core.LoadoutData;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.GsonHelper;
+import net.minecraft.util.RandomSource;
 import net.minecraft.util.profiling.ProfilerFiller;
+import net.minecraft.world.Difficulty;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.npc.Villager;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
+import java.util.Set;
 
 /**
  * Loads spellcaster loadouts from {@code data/<ns>/spellcasters/*.json}. Each file
@@ -42,11 +46,14 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
     }
 
     /**
-     * Resolve the loadout that applies to {@code mob}: for a villager, the loadout whose
-     * {@code profession} matches its profession, else the generic (profession-less) loadout
-     * for its type; for any other mob, the generic loadout.
+     * Resolve the loadout that applies to {@code mob}. Profession-specific loadouts win over
+     * generic (profession-less) ones; whichever bucket applies forms a <em>pool</em>. The pool
+     * is filtered by each loadout's context {@link SpellcasterLoadout#conditions() conditions}
+     * (dimension/biome/difficulty/time/…), evaluated fresh against the mob's current world. When
+     * more than one variant remains, one is picked by {@code pool_weight} and that choice is
+     * persisted per-NPC ({@link LoadoutData}) so it stays stable across reloads.
      *
-     * @return the applicable loadout, or {@code null} if none (= not a spellcaster)
+     * @return the applicable loadout, or {@code null} if none (= not a spellcaster here/now)
      */
     public static SpellcasterLoadout resolve(Mob mob) {
         List<SpellcasterLoadout> candidates = byType.get(EntityType.getKey(mob.getType()));
@@ -56,17 +63,70 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
         ResourceLocation profession = mob instanceof Villager villager
                 ? BuiltInRegistries.VILLAGER_PROFESSION.getKey(villager.getVillagerData().getProfession())
                 : null;
-        SpellcasterLoadout generic = null;
-        for (SpellcasterLoadout loadout : candidates) {
-            if (loadout.profession() == null) {
-                if (generic == null) {
-                    generic = loadout; // first profession-less entry is the fallback
+
+        // Profession-specific loadouts take precedence; whichever bucket matches is the pool.
+        List<SpellcasterLoadout> pool = new ArrayList<>();
+        if (profession != null) {
+            for (SpellcasterLoadout l : candidates) {
+                if (profession.equals(l.profession())) {
+                    pool.add(l);
                 }
-            } else if (profession != null && loadout.profession().equals(profession)) {
-                return loadout; // an exact profession match always wins
             }
         }
-        return generic;
+        if (pool.isEmpty()) {
+            for (SpellcasterLoadout l : candidates) {
+                if (l.profession() == null) {
+                    pool.add(l);
+                }
+            }
+        }
+        if (pool.isEmpty()) {
+            return null;
+        }
+
+        // Context gate: keep only loadouts whose conditions currently hold.
+        List<SpellcasterLoadout> passing = new ArrayList<>(pool.size());
+        for (SpellcasterLoadout l : pool) {
+            if (l.conditions() == null || l.conditions().test(mob)) {
+                passing.add(l);
+            }
+        }
+        if (passing.isEmpty()) {
+            return null;
+        }
+        if (passing.size() == 1) {
+            return passing.get(0); // single match — no choice to persist (the 0.3.x fast path)
+        }
+
+        // Several variants apply: sticky weighted pick so the mob keeps one variant across reloads.
+        ResourceLocation stored = LoadoutData.getSource(mob);
+        if (stored != null) {
+            for (SpellcasterLoadout l : passing) {
+                if (stored.equals(l.source())) {
+                    return l;
+                }
+            }
+        }
+        SpellcasterLoadout chosen = weightedPick(passing, mob.getRandom());
+        if (chosen.source() != null) {
+            LoadoutData.setSource(mob, chosen.source());
+        }
+        return chosen;
+    }
+
+    private static SpellcasterLoadout weightedPick(List<SpellcasterLoadout> pool, RandomSource random) {
+        int total = 0;
+        for (SpellcasterLoadout l : pool) {
+            total += Math.max(1, l.poolWeight());
+        }
+        int roll = random.nextInt(total);
+        for (SpellcasterLoadout l : pool) {
+            roll -= Math.max(1, l.poolWeight());
+            if (roll < 0) {
+                return l;
+            }
+        }
+        return pool.get(pool.size() - 1);
     }
 
     @Override
@@ -74,12 +134,10 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
         Map<ResourceLocation, List<SpellcasterLoadout>> result = new HashMap<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : files.entrySet()) {
             try {
-                SpellcasterLoadout loadout = parse(GsonHelper.convertToJsonObject(entry.getValue(), "loadout"));
+                SpellcasterLoadout loadout = parse(GsonHelper.convertToJsonObject(entry.getValue(), "loadout"), entry.getKey());
+                // Several loadouts may share an entity type (and profession): they form a per-NPC
+                // pick-one pool (resolved by pool_weight + conditions), so we keep them all.
                 List<SpellcasterLoadout> list = result.computeIfAbsent(loadout.entityType(), k -> new ArrayList<>());
-                if (list.removeIf(l -> Objects.equals(l.profession(), loadout.profession()))) {
-                    MagicNpcs.LOGGER.warn("Duplicate spellcaster loadout for {} (profession {}) — last one wins, file {}",
-                            loadout.entityType(), loadout.profession(), entry.getKey());
-                }
                 list.add(loadout);
             } catch (Exception ex) {
                 MagicNpcs.LOGGER.error("Skipping invalid spellcaster loadout {}: {}", entry.getKey(), ex.getMessage());
@@ -92,7 +150,7 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
         MagicNpcs.LOGGER.info("Loaded {} spellcaster loadout(s) across {} entity type(s)", total, frozen.size());
     }
 
-    private static SpellcasterLoadout parse(JsonObject json) {
+    private static SpellcasterLoadout parse(JsonObject json, ResourceLocation source) {
         ResourceLocation entityType = new ResourceLocation(GsonHelper.getAsString(json, LoadoutJson.ENTITY_TYPE));
         ResourceLocation profession = json.has(LoadoutJson.PROFESSION)
                 ? new ResourceLocation(GsonHelper.getAsString(json, LoadoutJson.PROFESSION))
@@ -100,6 +158,10 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
         // Clamp to sane ranges so a malformed pack can't break the mana/selection math.
         double maxMana = Math.max(0.0, GsonHelper.getAsDouble(json, LoadoutJson.MAX_MANA, 100.0));
         double manaRegen = Math.max(0.0, GsonHelper.getAsDouble(json, LoadoutJson.MANA_REGEN, 10.0));
+        int poolWeight = Math.max(1, GsonHelper.getAsInt(json, LoadoutJson.POOL_WEIGHT, 1));
+        LoadoutConditions conditions = json.has(LoadoutJson.CONDITIONS)
+                ? parseConditions(GsonHelper.getAsJsonObject(json, LoadoutJson.CONDITIONS))
+                : null;
 
         List<LoadoutEntry> spells = new ArrayList<>();
         for (JsonElement element : GsonHelper.getAsJsonArray(json, LoadoutJson.SPELLS)) {
@@ -113,6 +175,8 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
                     ? Math.max(0.0, GsonHelper.getAsDouble(o, LoadoutJson.COOLDOWN_MULTIPLIER)) : null;
             Integer windup = o.has(LoadoutJson.WINDUP)
                     ? Math.max(0, GsonHelper.getAsInt(o, LoadoutJson.WINDUP)) : null;
+            CastCondition condition = o.has(LoadoutJson.CONDITION)
+                    ? parseCondition(GsonHelper.getAsJsonObject(o, LoadoutJson.CONDITION)) : null;
             spells.add(new LoadoutEntry(
                     new ResourceLocation(GsonHelper.getAsString(o, LoadoutJson.SPELL)),
                     Math.max(1, GsonHelper.getAsInt(o, LoadoutJson.LEVEL, 1)),
@@ -121,13 +185,13 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
                     Math.max(0.0, GsonHelper.getAsDouble(o, LoadoutJson.MAX_RANGE, 20.0)),
                     Math.max(0.0, GsonHelper.getAsDouble(o, LoadoutJson.SAFETY_RADIUS, 1.5)),
                     parseRole(GsonHelper.getAsString(o, LoadoutJson.ROLE, "attack")),
-                    castChance, cooldown, cooldownMult, windup
+                    castChance, cooldown, cooldownMult, windup, condition
             ));
         }
         if (spells.isEmpty()) {
             throw new IllegalArgumentException("loadout has no spells");
         }
-        return new SpellcasterLoadout(entityType, profession, maxMana, manaRegen, spells);
+        return new SpellcasterLoadout(entityType, profession, maxMana, manaRegen, spells, conditions, poolWeight, source);
     }
 
     private static LoadoutEntry.Role parseRole(String raw) {
@@ -135,6 +199,100 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
             return LoadoutEntry.Role.valueOf(raw.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException ex) {
             throw new IllegalArgumentException("role must be 'attack' or 'support', got '" + raw + "'");
+        }
+    }
+
+    private static CastCondition parseCondition(JsonObject o) {
+        Double selfHp = o.has(LoadoutJson.CON_SELF_HP_BELOW)
+                ? clamp01(GsonHelper.getAsDouble(o, LoadoutJson.CON_SELF_HP_BELOW)) : null;
+        Double targetHp = o.has(LoadoutJson.CON_TARGET_HP_BELOW)
+                ? clamp01(GsonHelper.getAsDouble(o, LoadoutJson.CON_TARGET_HP_BELOW)) : null;
+        Integer enemies = o.has(LoadoutJson.CON_ENEMIES_WITHIN)
+                ? Math.max(0, GsonHelper.getAsInt(o, LoadoutJson.CON_ENEMIES_WITHIN)) : null;
+        Double radius = o.has(LoadoutJson.CON_ENEMIES_RADIUS)
+                ? Math.max(0.0, GsonHelper.getAsDouble(o, LoadoutJson.CON_ENEMIES_RADIUS)) : null;
+        Boolean hurt = o.has(LoadoutJson.CON_WHEN_RECENTLY_HURT)
+                ? GsonHelper.getAsBoolean(o, LoadoutJson.CON_WHEN_RECENTLY_HURT) : null;
+        Integer window = o.has(LoadoutJson.CON_RECENT_DAMAGE_WINDOW)
+                ? Math.max(0, GsonHelper.getAsInt(o, LoadoutJson.CON_RECENT_DAMAGE_WINDOW)) : null;
+        return new CastCondition(selfHp, targetHp, enemies, radius, hurt, window);
+    }
+
+    private static LoadoutConditions parseConditions(JsonObject o) {
+        List<ResourceLocation> dims = parseIdList(o, LoadoutJson.COND_DIMENSIONS);
+        List<String> biomes = parseStringList(o, LoadoutJson.COND_BIOMES);
+        Set<Difficulty> diffs = parseDifficulties(o);
+        LoadoutConditions.TimeOfDay time = o.has(LoadoutJson.COND_TIME)
+                ? parseTime(GsonHelper.getAsString(o, LoadoutJson.COND_TIME)) : null;
+        Integer minY = o.has(LoadoutJson.COND_MIN_Y) ? GsonHelper.getAsInt(o, LoadoutJson.COND_MIN_Y) : null;
+        Integer maxY = o.has(LoadoutJson.COND_MAX_Y) ? GsonHelper.getAsInt(o, LoadoutJson.COND_MAX_Y) : null;
+        Boolean raid = o.has(LoadoutJson.COND_REQUIRE_RAID)
+                ? GsonHelper.getAsBoolean(o, LoadoutJson.COND_REQUIRE_RAID) : null;
+        Boolean storm = o.has(LoadoutJson.COND_REQUIRE_STORM)
+                ? GsonHelper.getAsBoolean(o, LoadoutJson.COND_REQUIRE_STORM) : null;
+        List<Integer> moon = parseIntList(o, LoadoutJson.COND_MOON_PHASES);
+        return new LoadoutConditions(dims, biomes, diffs, time, minY, maxY, raid, storm, moon);
+    }
+
+    private static double clamp01(double v) {
+        return Math.max(0.0, Math.min(1.0, v));
+    }
+
+    private static List<ResourceLocation> parseIdList(JsonObject o, String key) {
+        if (!o.has(key)) {
+            return null;
+        }
+        List<ResourceLocation> out = new ArrayList<>();
+        for (JsonElement e : GsonHelper.getAsJsonArray(o, key)) {
+            ResourceLocation id = ResourceLocation.tryParse(e.getAsString());
+            if (id != null) {
+                out.add(id);
+            }
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    private static List<String> parseStringList(JsonObject o, String key) {
+        if (!o.has(key)) {
+            return null;
+        }
+        List<String> out = new ArrayList<>();
+        for (JsonElement e : GsonHelper.getAsJsonArray(o, key)) {
+            out.add(e.getAsString());
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    private static List<Integer> parseIntList(JsonObject o, String key) {
+        if (!o.has(key)) {
+            return null;
+        }
+        List<Integer> out = new ArrayList<>();
+        for (JsonElement e : GsonHelper.getAsJsonArray(o, key)) {
+            out.add(e.getAsInt());
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    private static Set<Difficulty> parseDifficulties(JsonObject o) {
+        if (!o.has(LoadoutJson.COND_DIFFICULTIES)) {
+            return null;
+        }
+        EnumSet<Difficulty> set = EnumSet.noneOf(Difficulty.class);
+        for (JsonElement e : GsonHelper.getAsJsonArray(o, LoadoutJson.COND_DIFFICULTIES)) {
+            Difficulty d = Difficulty.byName(e.getAsString().toLowerCase(Locale.ROOT));
+            if (d != null) {
+                set.add(d);
+            }
+        }
+        return set.isEmpty() ? null : set;
+    }
+
+    private static LoadoutConditions.TimeOfDay parseTime(String raw) {
+        try {
+            return LoadoutConditions.TimeOfDay.valueOf(raw.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("time must be 'day', 'night', or 'any', got '" + raw + "'");
         }
     }
 }

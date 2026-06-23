@@ -4,6 +4,8 @@ import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import com.otectus.magicnpcs.core.SchoolData;
 import com.otectus.magicnpcs.core.adapter.NpcAdapter;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
+import com.otectus.magicnpcs.core.feedback.Telegraphs;
+import com.otectus.magicnpcs.core.loadout.CastCondition;
 import com.otectus.magicnpcs.core.loadout.LoadoutEntry;
 import com.otectus.magicnpcs.core.loadout.SpellcasterLoadout;
 import com.otectus.magicnpcs.core.util.LineOfFire;
@@ -133,6 +135,10 @@ public class NpcSpellAttackGoal extends Goal {
             mob.getLookControl().setLookAt(target, 30.0F, 30.0F);
         }
         windupRemaining = windup;
+        // Telegraph the wind-up so the cast can be seen coming (server-spawned vanilla particles/sound).
+        Telegraphs.play(mob,
+                IronsBridge.telegraphFor(chosen.spell(), chosen.entry().level(), chosen.entry().safetyRadius()),
+                chosen.entry().safetyRadius());
     }
 
     @Override
@@ -177,6 +183,7 @@ public class NpcSpellAttackGoal extends Goal {
     }
 
     private void endAttempt() {
+        Telegraphs.clearGlow(mob);
         this.chosen = null;
         this.target = null;
         this.windupRemaining = 0;
@@ -203,7 +210,13 @@ public class NpcSpellAttackGoal extends Goal {
         return !MagicNpcsConfig.REQUIRE_LINE_OF_SIGHT.get() || mob.getSensing().hasLineOfSight(target);
     }
 
-    /** Weighted-random pick among castable spells: ATTACK in range + friendly-fire-clear, or SUPPORT when hurt. */
+    /**
+     * Weighted-random pick among castable spells: ATTACK in range + friendly-fire-clear, or SUPPORT
+     * when hurt. A spell may carry an optional reactive {@link CastCondition} (self/target HP,
+     * nearby-enemy count, recently-hurt) that further gates its eligibility; for SUPPORT a condition
+     * replaces the default "when hurt" gate. A spell whose condition is currently satisfied may get a
+     * configurable selection-weight bonus so the right tool is favoured (e.g. an AoE when swarmed).
+     */
     private Resolved choose(LivingEntity t) {
         double distSqr = mob.distanceToSqr(t);
         boolean hurt = mob.getHealth() < mob.getMaxHealth() * MagicNpcsConfig.SUPPORT_HEALTH_THRESHOLD.get();
@@ -213,8 +226,10 @@ public class NpcSpellAttackGoal extends Goal {
         // protection is on (so even an adapter-less skeleton won't blast the townsfolk).
         boolean friendlyFire = MagicNpcsConfig.FRIENDLY_FIRE_CHECK.get()
                 && (adapter.tracksAllies() || MagicNpcsConfig.PROTECT_BYSTANDERS.get());
+        boolean reactive = MagicNpcsConfig.REACTIVE_CASTING_ENABLED.get();
 
         List<Resolved> castable = new ArrayList<>();
+        List<Integer> weights = new ArrayList<>();
         int totalWeight = 0;
         for (Resolved r : spells) {
             LoadoutEntry e = r.entry();
@@ -224,8 +239,16 @@ public class NpcSpellAttackGoal extends Goal {
             if (!IronsBridge.canAfford(mob, r.spell(), e.level())) {
                 continue;
             }
+            CastCondition cond = reactive ? e.condition() : null;
+            boolean hasCond = cond != null && !cond.isEmpty();
+            boolean condMatched = false;
             if (e.role() == LoadoutEntry.Role.SUPPORT) {
-                if (!hurt) {
+                if (hasCond) {
+                    if (!cond.evaluate(mob, null, adapter)) {
+                        continue; // reactive condition replaces the default "when hurt" gate
+                    }
+                    condMatched = true;
+                } else if (!hurt) {
                     continue; // self-cast support only when threatened
                 }
             } else { // ATTACK
@@ -241,18 +264,29 @@ public class NpcSpellAttackGoal extends Goal {
                 if (friendlyFire && !LineOfFire.clear(mob, t, e.safetyRadius(), adapter)) {
                     continue; // an ally or protected bystander is in the line of fire / blast radius
                 }
+                if (hasCond) {
+                    if (!cond.evaluate(mob, t, adapter)) {
+                        continue; // reactive condition (e.g. execute below target HP, AoE when swarmed)
+                    }
+                    condMatched = true;
+                }
+            }
+            int weight = Math.max(1, e.weight());
+            if (condMatched) {
+                weight = (int) Math.max(1L, Math.round(weight * MagicNpcsConfig.MATCHED_CONDITION_WEIGHT_BONUS.get()));
             }
             castable.add(r);
-            totalWeight += Math.max(1, e.weight());
+            weights.add(weight);
+            totalWeight += weight;
         }
         if (castable.isEmpty()) {
             return null;
         }
         int roll = mob.getRandom().nextInt(totalWeight);
-        for (Resolved r : castable) {
-            roll -= Math.max(1, r.entry().weight());
+        for (int i = 0; i < castable.size(); i++) {
+            roll -= weights.get(i);
             if (roll < 0) {
-                return r;
+                return castable.get(i);
             }
         }
         return castable.get(castable.size() - 1);

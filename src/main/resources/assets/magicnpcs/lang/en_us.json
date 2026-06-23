@@ -9,17 +9,29 @@
   "magicnpcs.configuration.cooldownMultiplier": "Cooldown multiplier",
   "magicnpcs.configuration.regenMultiplier": "Mana regen multiplier",
   "magicnpcs.configuration.decisionIntervalTicks": "Cast decision interval (ticks)",
+  "magicnpcs.configuration.castChance": "Cast chance (hesitation)",
+  "magicnpcs.configuration.minCooldownTicks": "Minimum cooldown floor (ticks)",
   "magicnpcs.configuration.supportHealthThreshold": "Support-cast health threshold",
   "magicnpcs.configuration.friendlyFireCheck": "Friendly-fire check",
   "magicnpcs.configuration.peacefulDisablesCasting": "Disable casting on Peaceful",
   "magicnpcs.configuration.difficultyScaling": "Scale mana by difficulty",
 
   "magicnpcs.configuration.requireLineOfSight": "Require line of sight",
+  "magicnpcs.configuration.castWindupTicks": "Cast wind-up (ticks)",
   "magicnpcs.configuration.protectBystanders": "Protect bystanders",
   "magicnpcs.configuration.protectOwners": "Protect owners & teams",
 
   "magicnpcs.configuration.requireSpellFocus": "Require a spell focus to cast",
   "magicnpcs.configuration.spawnWithGearChance": "Spawn-with-focus chance",
+
+  "magicnpcs.configuration.reactive.enabled": "Enable reactive casting conditions",
+  "magicnpcs.configuration.reactive.matchedConditionWeightBonus": "Matched-condition weight bonus",
+
+  "magicnpcs.configuration.feedback.telegraphs": "Cast telegraphs",
+  "magicnpcs.configuration.feedback.schoolParticles": "School-coloured telegraph particles",
+  "magicnpcs.configuration.feedback.telegraphGlow": "Telegraph caster glow",
+  "magicnpcs.configuration.feedback.telegraphVolume": "Telegraph sound volume",
+  "magicnpcs.configuration.feedback.minDangerTier": "Telegraph minimum danger tier",
 
   "magicnpcs.configuration.spellBlacklist": "Spell blacklist",
   "magicnpcs.configuration.spellWhitelist": "Spell whitelist",

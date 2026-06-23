@@ -70,6 +70,16 @@ public final class MagicNpcsGameTests {
         IronsCastingTests.castChanceZeroNeverCasts(helper);
     }
 
+    /** Reactive condition: an execute spell fires only after the target drops below its HP threshold. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void executeConditionGatesCast(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.executeConditionGatesCast(helper);
+    }
+
     /** Adapter path: a Villager Recruit casts (skips if Recruits is absent). */
     @GameTest(template = "platform", timeoutTicks = 200, required = false)
     public static void recruitCasts(GameTestHelper helper) {

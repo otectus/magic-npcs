@@ -106,8 +106,10 @@ loadout's **`entity_type`** is what matters — not the file name or namespace.
 | `cooldown` | *(none)* | optional explicit cooldown in ticks; overrides the multiplier path (floored by `minCooldownTicks`) |
 | `cooldown_multiplier` | *(global `cooldownMultiplier`)* | optional per-spell cooldown multiplier (ignored if `cooldown` is set) |
 | `windup` | *(global `castWindupTicks`)* | optional aim wind-up in ticks before this attack spell fires |
+| `condition` | *(none)* | optional reactive trigger object — see [Reactive conditions](#9-reactive-conditions) |
 
-The last four fields are optional; omit them to inherit the matching global config default.
+The four tuning fields (`cast_chance`/`cooldown`/`cooldown_multiplier`/`windup`) are optional;
+omit them to inherit the matching global config default. `condition` is also optional.
 
 ### 3. A worked example (annotated)
 
@@ -208,7 +210,92 @@ Place that at `data/magicnpcs/tags/items/spell_focuses.json` in your pack. With
 `schools.schoolAwareFocus = true`, a school caster may instead hold a focus for **its own**
 school (e.g. an Iron's *fire focus* for a fire NPC).
 
-### 8. See also
+### 8. Contextual loadouts (`conditions`)
+
+Add a loadout-level `"conditions"` object to apply a loadout **only** in certain world
+contexts; it is checked when the mob spawns or loads. Every field is optional.
+
+```json
+{
+  "entity_type": "minecraft:skeleton",
+  "max_mana": 100, "mana_regen": 10,
+  "conditions": {
+    "time": "night",
+    "dimensions": ["minecraft:overworld"],
+    "biomes": ["#minecraft:is_forest", "minecraft:plains"],
+    "difficulties": ["normal", "hard"],
+    "min_y": 0, "max_y": 128,
+    "require_storm": false,
+    "require_raid": false,
+    "moon_phases": [0]
+  },
+  "spells": [ { "spell": "irons_spellbooks:magic_missile", "level": 1, "role": "attack" } ]
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `dimensions` | allowed dimension ids; any if omitted |
+| `biomes` | allowed biome ids or `#biome-tags`; any if omitted |
+| `difficulties` | allowed `peaceful`/`easy`/`normal`/`hard`; any if omitted |
+| `time` | `day`, `night`, or `any` |
+| `min_y` / `max_y` | inclusive block-Y band |
+| `require_raid` | require an active raid at the mob's position |
+| `require_storm` | require thundering weather |
+| `moon_phases` | allowed moon phases `0`–`7` |
+
+### 9. Reactive conditions
+
+Give a single spell a `"condition"` so it only fires in the right moment. For a SUPPORT
+spell the condition **replaces** the default "cast when below `supportHealthThreshold`"
+gate; for an ATTACK spell it is an extra gate on top of range/line-of-sight.
+
+```json
+{
+  "entity_type": "minecraft:vindicator",
+  "max_mana": 140, "mana_regen": 10,
+  "spells": [
+    { "spell": "irons_spellbooks:fireball", "level": 2, "role": "attack",
+      "min_range": 6, "max_range": 24, "safety_radius": 4,
+      "condition": { "enemies_within": 3, "enemies_radius": 6 } },
+    { "spell": "irons_spellbooks:magic_missile", "level": 1, "weight": 3, "role": "attack",
+      "condition": { "target_hp_below": 0.35 } },
+    { "spell": "irons_spellbooks:ascension", "level": 1, "role": "support",
+      "condition": { "self_hp_below": 0.4, "when_recently_hurt": true } }
+  ]
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `self_hp_below` | eligible when the caster's HP fraction is below this (0–1) |
+| `target_hp_below` | eligible when the target's HP fraction is below this (an "execute"; ATTACK only) |
+| `enemies_within` + `enemies_radius` | eligible when ≥ N hostiles are within the radius (blocks; default 8) — favours AoE when swarmed |
+| `when_recently_hurt` + `recent_damage_window` | eligible only if the caster took mob damage within the window (ticks; default 60) — e.g. a blink/retaliation |
+
+A satisfied condition can also raise a spell's pick weight via
+`balance`/`reactive.matchedConditionWeightBonus` (default 1.0 = no bias). Set
+`reactive.enabled = false` to ignore all conditions (spells fall back to role/range only).
+
+### 10. Loadout pools (variety)
+
+Several loadouts may target the **same** entity type (and profession). Each NPC sticky-picks
+one variant by `pool_weight` (persisted, so it does not change on reload), giving natural
+variety — e.g. some skeletons are fire-mages, others ice-mages. Combine with `conditions`
+for "this variant only in the nether", etc.
+
+```json
+{ "entity_type": "minecraft:skeleton", "pool_weight": 3, "max_mana": 100, "mana_regen": 10,
+  "spells": [ { "spell": "irons_spellbooks:firebolt", "level": 1, "role": "attack" } ] }
+```
+```json
+{ "entity_type": "minecraft:skeleton", "pool_weight": 1, "max_mana": 100, "mana_regen": 10,
+  "spells": [ { "spell": "irons_spellbooks:icicle", "level": 1, "role": "attack" } ] }
+```
+
+> Two files for the same type that used to be a "last one wins" override are now **pooled**.
+
+### 11. See also
 
 - **Shipped loadouts** (great references) — bundled in the jar under
   `data/magicnpcs/spellcasters/`: `skeleton`, `recruit`, `bowman`, `crossbowman`, `captain`,
@@ -263,6 +350,10 @@ Server config `config/magicnpcs-server.toml` (auto-synced to clients):
 - **equipment** — `requireSpellFocus`, `spawnWithGearChance` (both use the
   `magicnpcs:spell_focuses` item tag, which ships pre-filled with Iron's focuses
   (`#irons_spellbooks:school_focus`); add your own staves/spellbooks via a datapack)
+- **reactive** — `enabled`, `matchedConditionWeightBonus` (per-spell `condition` blocks;
+  see [Reactive conditions](#9-reactive-conditions))
+- **feedback** — `telegraphs`, `schoolParticles`, `telegraphGlow`, `telegraphVolume`,
+  `minDangerTier` (the cast "tell" shown during a caster's wind-up)
 - **spells** — `spellBlacklist`, `spellWhitelist`
 - **recruits** — `enabled`, `manaPerLevel`, `useIronsAI`, `ironsAiSpeed`, `ironsAiIntervalTicks`
 - **compat** — per-mod loadout toggles (`guardvillagers`, `mca`, `minecolonies`,

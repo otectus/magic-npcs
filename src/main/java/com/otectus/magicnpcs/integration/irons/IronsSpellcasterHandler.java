@@ -57,7 +57,10 @@ public class IronsSpellcasterHandler {
 
     @SubscribeEvent
     public void onRegisterCommands(net.minecraftforge.event.RegisterCommandsEvent event) {
-        if (MagicNpcsConfig.SCHOOLS_COMMAND_ENABLED.get()) {
+        // RegisterCommandsEvent can fire before the server config is loaded (notably in the
+        // gametest dev runtime), where reading a config value throws. Default to registering
+        // when the config isn't loaded yet — the option defaults to enabled anyway.
+        if (!MagicNpcsConfig.SPEC.isLoaded() || MagicNpcsConfig.SCHOOLS_COMMAND_ENABLED.get()) {
             SchoolCommand.register(event.getDispatcher());
         }
     }

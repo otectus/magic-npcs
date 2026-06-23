@@ -3,14 +3,41 @@
 All notable changes to Magic NPCs are documented here. Versions follow
 `MAJOR.MINOR.PATCH`; this is a pre-1.0 line.
 
-## [0.4.0] — cast pacing & aimed casting
+## [0.4.0] — reactive casting, telegraphs, contextual & pooled loadouts
 
-Per-spell pacing controls and a real aiming wind-up for the built-in casting goal. Each
-knob has a global default in config and an optional per-spell override in the loadout
-JSON. Builds green; shipped loadouts regenerate unchanged via `runData`, and the offline
-`bootSanity` GameTest still passes.
+Casters that read the moment and fit the pack: per-spell reactive conditions, a visible
+cast "tell" during the wind-up, and loadouts that can be gated by world context or pooled
+into per-NPC variants — on top of the cast-pacing/aimed-casting work below. Every addition
+is opt-in and backward compatible; existing datapacks and configs are unchanged, shipped
+loadouts regenerate byte-for-byte via `runData`, and the offline `bootSanity` GameTest
+still passes with neither Iron's nor Recruits installed.
 
 ### Added
+- **Reactive cast conditions** (per-spell `condition` block; master `reactive.enabled`). A
+  loadout spell may gate itself on the situation: `self_hp_below` (panic shields/heals),
+  `target_hp_below` (executes), `enemies_within`/`enemies_radius` (favour an AoE when
+  swarmed), and `when_recently_hurt`/`recent_damage_window` (blink/retaliate when struck).
+  For SUPPORT spells a condition replaces the default "cast when hurt" gate. A satisfied
+  condition can also bias selection weight (`reactive.matchedConditionWeightBonus`, default
+  1.0 = off) so the right tool is favoured. All vanilla logic — no extra dependency.
+- **Cast telegraphs & school identity** (`[feedback]`). When a caster begins its attack
+  wind-up it now plays a brief "tell" — server-spawned vanilla particles tinted by the
+  spell's Iron's **school colour**, plus a charge sound — scaled by a danger tier (rarity +
+  AoE size). Toggles: `feedback.telegraphs`, `feedback.schoolParticles`,
+  `feedback.telegraphGlow`, `feedback.telegraphVolume`, `feedback.minDangerTier`.
+  Dedicated-server-safe (broadcast to tracking clients); no-op when `castWindupTicks` is 0.
+- **Contextual loadouts** (loadout-level `conditions` block). Gate a loadout by world
+  context — `dimensions`, `biomes` (ids or `#tags`), `difficulties`, `time` (day/night),
+  `min_y`/`max_y`, `require_raid`, `require_storm`, `moon_phases` — evaluated when the mob
+  spawns/loads. Lets e.g. nether mobs cast fire, surface mobs cast only at night, or a
+  variant appear only during a raid. Vanilla-only predicates.
+- **Loadout pools / variety** (loadout-level `pool_weight`). Several loadouts may now target
+  the same entity type (and profession); each NPC sticky-picks one by weight (persisted, so
+  it does not re-roll on reload) — a skeleton can roll a fire-mage *or* an ice-mage variant.
+  Profession-specific loadouts still win over generic ones; within the winning bucket the
+  matching, condition-passing variants form the pool.
+
+### Added (cast pacing & aimed casting)
 - **Casting wind-up + continuous aim** (`targeting.castWindupTicks`, default 6; per-spell
   `windup`). Before an attack spell fires, the caster faces and **tracks** its target for
   the wind-up, re-checking line of sight/range each tick, and only casts if the target is
@@ -30,10 +57,34 @@ JSON. Builds green; shipped loadouts regenerate unchanged via `runData`, and the
 - `NpcSpellAttackGoal` now runs across a short wind-up window (adds `tick()`/`stop()` and
   a re-validating `canContinueToUse()`) instead of casting instantly on activation.
 - The 20-tick cooldown floor moved from a hard-coded constant to `balance.minCooldownTicks`.
+- **Multiple loadouts for one entity type now form a pick-one pool** instead of "last file
+  wins". If a pack previously relied on a duplicate silently overriding another, give the
+  losing file a context `conditions` block or accept that both are now pooled.
+
+### Fixed
+- Added the missing config labels for `castChance`, `minCooldownTicks`, and `castWindupTicks`
+  so every option now has an `en_us.json` translation key.
+- `onRegisterCommands` no longer reads a config value before the server config is loaded
+  (guarded with `ForgeConfigSpec.isLoaded()`) — a latent crash that surfaced once the dev
+  runtime could load Iron's and reach command registration.
+
+### Dev tooling
+- The `-PdevRuntime` gametest/client now actually **runs Iron's + Recruits** in the named
+  ForgeGradle workspace (previously impossible): Mixin is given ForgeGradle's SRG→named
+  mapping (`mixin.env.refMapRemappingFile`) so Iron's production refmap resolves. The runtime
+  stack loads from local `libs/` jars (Iron's 3.16.1 + `irons_lib`, GeckoLib, PlayerAnimator,
+  Recruits). `runGameTestServer -PdevRuntime` runs the casting GameTests for real — the
+  universal skeleton path passes (real `onCast`, mana spent). See `docs/dev-runtime.md`.
 
 ### Notes
 - Fully backward compatible: loadout JSON fields are optional and inherit the matching
   global config default when omitted; existing packs and shipped loadouts are unchanged.
+- Reactive `condition`s and loadout `conditions` use vanilla world/entity APIs only, so they
+  evaluate without Iron's; telegraph particle colours/sounds come from Iron's schools (read
+  in the `IronsBridge` seam) and degrade to a neutral tell when a school has none.
+- The telegraph look, school-coloured particles, and live reactive/contextual behaviour are
+  not runtime-verified in the build environment (no Iron's runtime); verify them in an
+  instance with Iron's installed. Builds green and offline `bootSanity` passes.
 - Iron's Spells 'n Spellbooks and Villager Recruits remain compile-only soft dependencies.
 
 ## [0.3.0] — review fixes, completed deferred systems & datapack docs

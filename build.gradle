@@ -19,6 +19,9 @@ minecraft {
             // 3rd-party production mods (Iron's) ship SRG mixin refmaps; in the named dev runtime,
             // have Mixin remap them via the runtime naming service so their @Injects resolve.
             property 'mixin.env.remapRefMap', 'true'
+            // …and point Mixin at ForgeGradle's SRG→named mapping so SRG refmap entries (e.g. Iron's
+            // EntityMixin targeting m_7307_/isAlliedTo) resolve against the named runtime classes.
+            property 'mixin.env.refMapRemappingFile', file('build/createSrgToMcp/output.srg').absolutePath
             mods {
                 magicnpcs {
                     source sourceSets.main
@@ -84,11 +87,15 @@ dependencies {
     // PlayerAnimator) + Recruits at runtime so casting can actually run. runtimeOnly → never
     // shipped or committed; versions pinned to Iron's 3.15.x requirements. See docs/dev-runtime.md.
     if (project.hasProperty('devRuntime')) {
-        runtimeOnly fg.deobf("curse.maven:${irons_spellbooks_project}:${irons_spellbooks_file}")
-        runtimeOnly fg.deobf("blank:geckolib:4.8.3") // libs/geckolib-4.8.3.jar — Modrinth maven served a non-Forge file
+        // Full Iron's runtime stack from local libs/ jars (the user's pack versions), so the
+        // dev runtime matches production and needs no network for Iron's/GeckoLib/PlayerAnimator.
+        // Curios resolves from the Gradle cache / Modrinth. runtimeOnly → never shipped/committed.
+        runtimeOnly fg.deobf("blank:irons_spellbooks:${irons_spellbooks_runtime}") // libs/irons_spellbooks-1.20.1-3.16.1.jar
+        runtimeOnly fg.deobf("blank:irons_lib:1.20.1-1.1.0")                        // libs/irons_lib-*.jar (Iron's 3.16.x split-out lib)
+        runtimeOnly fg.deobf("blank:geckolib:4.8.3")                                // libs/geckolib-4.8.3.jar (Forge jar)
         runtimeOnly fg.deobf("maven.modrinth:curios:5.14.1+1.20.1")
-        runtimeOnly fg.deobf("maven.modrinth:playeranimator:1.0.2-rc1+1.20-forge")
-        runtimeOnly fg.deobf("blank:recruits:${recruits_jar_version}")
+        runtimeOnly fg.deobf("blank:player-animation-lib-forge:1.0.2-rc1+1.20")     // libs/player-animation-lib-forge-*.jar
+        runtimeOnly fg.deobf("blank:recruits:${recruits_jar_version}")              // libs/recruits-1.20.1-1.15.0.jar
     }
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'

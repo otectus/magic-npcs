@@ -36,6 +36,13 @@ public final class MagicNpcsConfig {
     public static final ForgeConfigSpec.BooleanValue PROTECT_OWNERS;
     public static final ForgeConfigSpec.BooleanValue REQUIRE_SPELL_FOCUS;
     public static final ForgeConfigSpec.DoubleValue SPAWN_WITH_GEAR_CHANCE;
+    public static final ForgeConfigSpec.BooleanValue REACTIVE_CASTING_ENABLED;
+    public static final ForgeConfigSpec.DoubleValue MATCHED_CONDITION_WEIGHT_BONUS;
+    public static final ForgeConfigSpec.BooleanValue FEEDBACK_TELEGRAPHS;
+    public static final ForgeConfigSpec.BooleanValue FEEDBACK_SCHOOL_PARTICLES;
+    public static final ForgeConfigSpec.BooleanValue FEEDBACK_TELEGRAPH_GLOW;
+    public static final ForgeConfigSpec.DoubleValue FEEDBACK_TELEGRAPH_VOLUME;
+    public static final ForgeConfigSpec.IntValue FEEDBACK_MIN_DANGER_TIER;
     public static final ForgeConfigSpec.BooleanValue RECRUITS_INTEGRATION_ENABLED;
     public static final ForgeConfigSpec.DoubleValue RECRUITS_MANA_PER_LEVEL;
     public static final ForgeConfigSpec.BooleanValue RECRUITS_USE_IRONS_AI;
@@ -185,6 +192,47 @@ public final class MagicNpcsConfig {
                         "Default 0 (off). Has no effect if that tag is empty.")
                 .translation(TKEY + "spawnWithGearChance")
                 .defineInRange("spawnWithGearChance", 0.0D, 0.0D, 1.0D);
+        b.pop();
+
+        b.push("reactive");
+        b.comment("Per-spell reactive conditions: a loadout spell may carry a 'condition' block (self/target HP,",
+                "nearby-enemy count, recently-hurt) so casters use the right tool at the right moment.");
+        REACTIVE_CASTING_ENABLED = b
+                .comment("Master switch for per-spell reactive conditions. When false, a spell's 'condition' is ignored",
+                        "(it stays eligible by role/range/line-of-sight, as in 0.3.x).")
+                .translation(TKEY + "reactive.enabled")
+                .define("enabled", true);
+        MATCHED_CONDITION_WEIGHT_BONUS = b
+                .comment("Selection-weight multiplier applied to a conditioned spell while its condition is satisfied",
+                        "(e.g. favour an AoE when swarmed). 1.0 = no bias; only affects spells that declare a condition.")
+                .translation(TKEY + "reactive.matchedConditionWeightBonus")
+                .defineInRange("matchedConditionWeightBonus", 1.0D, 1.0D, 100.0D);
+        b.pop();
+
+        b.push("feedback");
+        b.comment("Cosmetic combat readability. Telegraphs play during a caster's wind-up so its attacks can be",
+                "seen coming; they are server-spawned vanilla particles/sounds (safe on dedicated servers).");
+        FEEDBACK_TELEGRAPHS = b
+                .comment("Play a brief 'tell' (particles + sound) when a caster begins an attack wind-up.",
+                        "Has no effect when castWindupTicks is 0 (instant casts cannot be telegraphed).")
+                .translation(TKEY + "feedback.telegraphs")
+                .define("telegraphs", true);
+        FEEDBACK_SCHOOL_PARTICLES = b
+                .comment("Tint telegraph particles by the spell's Iron's school colour (vs a neutral colour).")
+                .translation(TKEY + "feedback.schoolParticles")
+                .define("schoolParticles", true);
+        FEEDBACK_TELEGRAPH_GLOW = b
+                .comment("Briefly outline-glow the caster during its wind-up.")
+                .translation(TKEY + "feedback.telegraphGlow")
+                .define("telegraphGlow", false);
+        FEEDBACK_TELEGRAPH_VOLUME = b
+                .comment("Volume [0..1] of the telegraph/charge sound (0 = silent).")
+                .translation(TKEY + "feedback.telegraphVolume")
+                .defineInRange("telegraphVolume", 0.5D, 0.0D, 1.0D);
+        FEEDBACK_MIN_DANGER_TIER = b
+                .comment("Only telegraph spells at or above this danger tier (0..4, from rarity + AoE size). 0 = telegraph all.")
+                .translation(TKEY + "feedback.minDangerTier")
+                .defineInRange("minDangerTier", 0, 0, 4);
         b.pop();
 
         b.push("spells");

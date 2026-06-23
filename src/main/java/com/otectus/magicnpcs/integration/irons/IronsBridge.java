@@ -2,6 +2,7 @@ package com.otectus.magicnpcs.integration.irons;
 
 import com.otectus.magicnpcs.MagicNpcs;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
+import com.otectus.magicnpcs.core.feedback.TelegraphInfo;
 import io.redspace.ironsspellbooks.api.magic.MagicData;
 import io.redspace.ironsspellbooks.api.registry.AttributeRegistry;
 import io.redspace.ironsspellbooks.api.registry.SchoolRegistry;
@@ -9,14 +10,18 @@ import io.redspace.ironsspellbooks.api.registry.SpellRegistry;
 import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
 import io.redspace.ironsspellbooks.api.spells.CastSource;
 import io.redspace.ironsspellbooks.api.spells.SchoolType;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.item.Item;
+import org.joml.Vector3f;
 
 /**
  * The single seam to Iron's Spellbooks for the universal (mod-agnostic) casting
@@ -60,6 +65,27 @@ public final class IronsBridge {
     public static TagKey<Item> schoolFocusTag(ResourceLocation schoolId) {
         SchoolType school = SchoolRegistry.getSchool(schoolId);
         return school == null ? null : school.getFocus();
+    }
+
+    /**
+     * Build a vanilla-only {@link TelegraphInfo} for a spell: the caster's wind-up "tell" is
+     * tinted by the spell's Iron's school colour and given a danger tier from rarity + AoE size.
+     * The only place Iron's school colour/sound are read; returns plain data so the spawner stays
+     * Iron's-free.
+     */
+    public static TelegraphInfo telegraphFor(AbstractSpell spell, int level, double safetyRadius) {
+        SchoolType school = spell.getSchoolType();
+        Vector3f color = school != null ? school.getTargetingColor() : null;
+        float r = color != null ? color.x() : 0.8f;
+        float g = color != null ? color.y() : 0.8f;
+        float b = color != null ? color.z() : 1.0f;
+        SoundEvent castSound = school != null ? school.getCastSound() : null;
+        if (castSound == null) {
+            castSound = SoundEvents.EVOKER_PREPARE_ATTACK;
+        }
+        ResourceLocation soundId = BuiltInRegistries.SOUND_EVENT.getKey(castSound);
+        int tier = Math.min(4, spell.getRarity(level).getValue() + (safetyRadius >= 3.0 ? 1 : 0));
+        return new TelegraphInfo(r, g, b, soundId, tier);
     }
 
     /** Resolve a loadout spell id to an Iron's spell, or {@code null} if unknown/unregistered. */

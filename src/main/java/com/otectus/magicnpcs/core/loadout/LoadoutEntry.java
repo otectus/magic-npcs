@@ -23,6 +23,8 @@ import net.minecraft.resources.ResourceLocation;
  *                           {@code null} inherits {@code balance.cooldownMultiplier}
  * @param windupTicks        optional aim wind-up in ticks before an attack spell fires; {@code null}
  *                           inherits {@code targeting.castWindupTicks}
+ * @param condition          optional reactive trigger gating this spell's eligibility (self/target HP,
+ *                           nearby-enemy count, recently-hurt); {@code null} = no extra condition
  */
 public record LoadoutEntry(
         ResourceLocation spell,
@@ -35,7 +37,8 @@ public record LoadoutEntry(
         Double castChance,
         Integer cooldownTicks,
         Double cooldownMultiplier,
-        Integer windupTicks
+        Integer windupTicks,
+        CastCondition condition
 ) {
     public enum Role { ATTACK, SUPPORT }
 
@@ -46,6 +49,6 @@ public record LoadoutEntry(
      */
     public LoadoutEntry(ResourceLocation spell, int level, int weight,
                         double minRange, double maxRange, double safetyRadius, Role role) {
-        this(spell, level, weight, minRange, maxRange, safetyRadius, role, null, null, null, null);
+        this(spell, level, weight, minRange, maxRange, safetyRadius, role, null, null, null, null, null);
     }
 }

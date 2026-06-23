@@ -1,9 +1,14 @@
 package com.otectus.magicnpcs.integration.irons;
 
 import com.otectus.magicnpcs.compat.RecruitsCompat;
+import com.otectus.magicnpcs.compat.recruits.RecruitsTestSupport;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
+import com.otectus.magicnpcs.core.loadout.CastCondition;
+import com.otectus.magicnpcs.core.loadout.LoadoutEntry;
+import com.otectus.magicnpcs.core.loadout.SpellcasterLoadout;
 import io.redspace.ironsspellbooks.api.magic.MagicData;
 import io.redspace.ironsspellbooks.api.registry.AttributeRegistry;
+import io.redspace.ironsspellbooks.entity.mobs.goals.WizardAttackGoal;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -13,6 +18,9 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.monster.Zombie;
+
+import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * Iron's-side bodies for the runtime casting GameTests. Classloaded only from the
@@ -27,7 +35,7 @@ public final class IronsCastingTests {
 
     /** Universal path: a skeleton (shipped loadout) spends mana casting at a target. */
     public static void skeletonCastsMagicMissile(GameTestHelper helper) {
-        runCastTest(helper, EntityType.SKELETON);
+        runCastTest(helper, EntityType.SKELETON, null);
     }
 
     /** Adapter path: a Villager Recruit casts (skips cleanly if Recruits is absent). */
@@ -37,7 +45,10 @@ public final class IronsCastingTests {
             helper.succeed(); // Recruits not installed — nothing to assert
             return;
         }
-        runCastTest(helper, type);
+        // A recruit only attacks (and so only casts) when its command state allows it and the
+        // target is an enemy; an ownerless recruit defaults otherwise. Set it aggressive so it
+        // engages the hostile zombie — the diplomacy gate is exactly what the adapter enforces.
+        runCastTest(helper, type, RecruitsTestSupport::makeAggressive);
     }
 
     /** Iron's-AI path: a recruit driven by Iron's WizardAttackGoal (via the mixin) casts. */
@@ -52,10 +63,64 @@ public final class IronsCastingTests {
         // restoring it right after is safe — the WizardAttackGoal is already injected.
         MagicNpcsConfig.RECRUITS_USE_IRONS_AI.set(true);
         try {
-            runCastTest(helper, type);
+            runCastTest(helper, type, RecruitsTestSupport::makeAggressive);
         } finally {
             MagicNpcsConfig.RECRUITS_USE_IRONS_AI.set(prev);
         }
+    }
+
+    /**
+     * Reactive condition (0.4.0): an ATTACK spell carrying a {@code target_hp_below} "execute"
+     * condition must <b>not</b> fire on a full-HP target, and <b>must</b> fire once the target
+     * drops below the threshold. Uses a husk (no shipped loadout, sun-immune) with a
+     * programmatically-built loadout so only the condition gate is under test; the target is
+     * invulnerable so only the scripted HP changes drive the condition.
+     */
+    public static void executeConditionGatesCast(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+
+        Mob caster = (Mob) helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        AttributeInstance maxAttr = caster.getAttribute(AttributeRegistry.MAX_MANA.get());
+        AttributeInstance regenAttr = caster.getAttribute(AttributeRegistry.MANA_REGEN.get());
+        if (maxAttr == null || regenAttr == null) {
+            helper.fail("husk is missing Iron's mana attributes");
+            return;
+        }
+        maxAttr.setBaseValue(200.0);
+        regenAttr.setBaseValue(0.0); // no regen, so mana only ever drops by casting
+        IronsBridge.initMana(caster);
+
+        // Execute spell: eligible only when the target's HP fraction is below 0.5. windup 0 = instant.
+        CastCondition execute = new CastCondition(null, 0.5, null, null, null, null);
+        LoadoutEntry entry = new LoadoutEntry(
+                new ResourceLocation("irons_spellbooks", "magic_missile"),
+                1, 1, 0.0, 16.0, 1.0, LoadoutEntry.Role.ATTACK,
+                null, null, null, 0, execute);
+        SpellcasterLoadout loadout = new SpellcasterLoadout(
+                EntityType.getKey(EntityType.HUSK), 200.0, 0.0, List.of(entry));
+        // Drop the husk's default melee goals (they hold the LOOK flag) and run only our cast goal.
+        caster.goalSelector.removeAllGoals(g -> true);
+        caster.goalSelector.addGoal(2, new NpcSpellAttackGoal(caster, loadout));
+
+        Zombie target = helper.spawn(EntityType.ZOMBIE, new BlockPos(1, 2, 3));
+        target.setNoAi(true);
+        target.setInvulnerable(true); // husk melee / sun can't change its HP — only the script does
+        double maxMana = maxAttr.getValue();
+
+        helper.startSequence()
+                // Full-HP target: the execute condition fails → it must not cast.
+                .thenExecuteFor(40, () -> caster.setTarget(target))
+                .thenExecute(() -> helper.assertTrue(
+                        MagicData.getPlayerMagicData(caster).getMana() >= maxMana - 0.5,
+                        "execute spell must NOT cast on a full-HP target"))
+                // Drop the target below 50% → the condition now passes → it must cast.
+                .thenExecute(() -> target.setHealth(target.getMaxHealth() * 0.25F))
+                .thenExecuteFor(80, () -> caster.setTarget(target))
+                .thenExecute(() -> helper.assertTrue(
+                        MagicData.getPlayerMagicData(caster).getMana() < maxMana - 0.5,
+                        "execute spell must cast once the target drops below 50% HP"))
+                .thenSucceed();
     }
 
     /**
@@ -91,12 +156,19 @@ public final class IronsCastingTests {
      * (mana is deducted only by our economy, ADR 0001). With the default wind-up this also
      * exercises the wind-up lifecycle: the cast lands a few ticks after target acquisition.
      */
-    private static void runCastTest(GameTestHelper helper, EntityType<?> casterType) {
+    private static void runCastTest(GameTestHelper helper, EntityType<?> casterType, Consumer<Mob> afterSpawn) {
         // Casting is suppressed on Peaceful (peacefulDisablesCasting); ensure a fighting difficulty.
         helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
 
         Mob caster = (Mob) helper.spawn(casterType, new BlockPos(1, 2, 1));
         caster.setPersistenceRequired();
+        if (afterSpawn != null) {
+            afterSpawn.accept(caster); // mod-specific setup (e.g. put a recruit in an aggressive state)
+        }
+        // Isolate the casting goal: a melee mob's attack goal (MOVE+LOOK) would otherwise hold the
+        // LOOK flag at the same priority and starve our LOOK-only cast goal. We're verifying the cast
+        // pipeline + adapter, not vanilla goal scheduling, so drop the competing goals.
+        caster.goalSelector.removeAllGoals(g -> !(g instanceof NpcSpellAttackGoal) && !(g instanceof WizardAttackGoal));
 
         Zombie target = helper.spawn(EntityType.ZOMBIE, new BlockPos(1, 2, 3));
         target.setNoAi(true); // a still dummy in range and line of sight

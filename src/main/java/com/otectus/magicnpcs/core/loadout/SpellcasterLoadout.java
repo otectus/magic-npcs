@@ -17,16 +17,34 @@ import java.util.List;
  * @param maxMana    base value applied to Iron's {@code MAX_MANA} attribute on spawn
  * @param manaRegen  base value applied to Iron's {@code MANA_REGEN} attribute on spawn
  * @param spells     the spells this type may cast
+ * @param conditions optional world-context gate (dimension/biome/difficulty/time/…); {@code null} = always
+ * @param poolWeight relative weight when several loadouts match one mob and form a pick-one-per-NPC pool
+ * @param source     the datapack file id this loadout was loaded from; used as the stable identity for
+ *                   the sticky per-NPC pool pick. {@code null} for in-code loadouts (data generator)
  */
 public record SpellcasterLoadout(
         ResourceLocation entityType,
         ResourceLocation profession,
         double maxMana,
         double manaRegen,
-        List<LoadoutEntry> spells
+        List<LoadoutEntry> spells,
+        LoadoutConditions conditions,
+        int poolWeight,
+        ResourceLocation source
 ) {
     /** Convenience for a loadout that applies to a whole entity type (no profession scoping). */
     public SpellcasterLoadout(ResourceLocation entityType, double maxMana, double manaRegen, List<LoadoutEntry> spells) {
         this(entityType, null, maxMana, manaRegen, spells);
+    }
+
+    /** Convenience for a profession-scoped loadout without context conditions or pooling. */
+    public SpellcasterLoadout(ResourceLocation entityType, ResourceLocation profession,
+                              double maxMana, double manaRegen, List<LoadoutEntry> spells) {
+        this(entityType, profession, maxMana, manaRegen, spells, null, 1, null);
+    }
+
+    /** A copy of this loadout tagged with the datapack file it came from (set on load). */
+    public SpellcasterLoadout withSource(ResourceLocation src) {
+        return new SpellcasterLoadout(entityType, profession, maxMana, manaRegen, spells, conditions, poolWeight, src);
     }
 }
