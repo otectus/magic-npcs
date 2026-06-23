@@ -3,6 +3,39 @@
 All notable changes to Magic NPCs are documented here. Versions follow
 `MAJOR.MINOR.PATCH`; this is a pre-1.0 line.
 
+## [0.4.0] — cast pacing & aimed casting
+
+Per-spell pacing controls and a real aiming wind-up for the built-in casting goal. Each
+knob has a global default in config and an optional per-spell override in the loadout
+JSON. Builds green; shipped loadouts regenerate unchanged via `runData`, and the offline
+`bootSanity` GameTest still passes.
+
+### Added
+- **Casting wind-up + continuous aim** (`targeting.castWindupTicks`, default 6; per-spell
+  `windup`). Before an attack spell fires, the caster faces and **tracks** its target for
+  the wind-up, re-checking line of sight/range each tick, and only casts if the target is
+  still valid — fixing the old "look once, fire the same tick" behaviour that flung
+  off-axis shots wide. `0` restores instant casting.
+- **Per-spell cast chance** (`balance.castChance`, default 1.0; per-spell `cast_chance`):
+  a [0..1] probability that a caster actually casts on each decision, so casters can
+  "hesitate" instead of firing the instant a spell is eligible.
+- **Per-spell cooldown override** (per-spell `cooldown` explicit ticks, or
+  `cooldown_multiplier`; precedence: explicit > multiplier > global `cooldownMultiplier`)
+  and a configurable floor `balance.minCooldownTicks` (default 20, formerly hard-coded).
+- **GameTest** `castChanceZeroNeverCasts`: with `castChance` forced to 0 a skeleton never
+  spends mana over a 100-tick window (skips offline like the other runtime tests). The
+  existing `skeletonCastsMagicMissile` now also exercises the default wind-up path.
+
+### Changed
+- `NpcSpellAttackGoal` now runs across a short wind-up window (adds `tick()`/`stop()` and
+  a re-validating `canContinueToUse()`) instead of casting instantly on activation.
+- The 20-tick cooldown floor moved from a hard-coded constant to `balance.minCooldownTicks`.
+
+### Notes
+- Fully backward compatible: loadout JSON fields are optional and inherit the matching
+  global config default when omitted; existing packs and shipped loadouts are unchanged.
+- Iron's Spells 'n Spellbooks and Villager Recruits remain compile-only soft dependencies.
+
 ## [0.3.0] — review fixes, completed deferred systems & datapack docs
 
 An independent review pass: correctness fixes, four previously-deferred systems

@@ -22,6 +22,8 @@ public final class MagicNpcsConfig {
     public static final ForgeConfigSpec.DoubleValue COOLDOWN_MULTIPLIER;
     public static final ForgeConfigSpec.DoubleValue REGEN_MULTIPLIER;
     public static final ForgeConfigSpec.IntValue DECISION_INTERVAL_TICKS;
+    public static final ForgeConfigSpec.DoubleValue CAST_CHANCE;
+    public static final ForgeConfigSpec.IntValue MIN_COOLDOWN_TICKS;
     public static final ForgeConfigSpec.DoubleValue SUPPORT_HEALTH_THRESHOLD;
     public static final ForgeConfigSpec.BooleanValue FRIENDLY_FIRE_CHECK;
     public static final ForgeConfigSpec.BooleanValue PEACEFUL_DISABLES_CASTING;
@@ -29,6 +31,7 @@ public final class MagicNpcsConfig {
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SPELL_BLACKLIST;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SPELL_WHITELIST;
     public static final ForgeConfigSpec.BooleanValue REQUIRE_LINE_OF_SIGHT;
+    public static final ForgeConfigSpec.IntValue CAST_WINDUP_TICKS;
     public static final ForgeConfigSpec.BooleanValue PROTECT_BYSTANDERS;
     public static final ForgeConfigSpec.BooleanValue PROTECT_OWNERS;
     public static final ForgeConfigSpec.BooleanValue REQUIRE_SPELL_FOCUS;
@@ -121,6 +124,15 @@ public final class MagicNpcsConfig {
                 .comment("Minimum ticks between an NPC's cast attempts.")
                 .translation(TKEY + "decisionIntervalTicks")
                 .defineInRange("decisionIntervalTicks", 10, 1, 200);
+        CAST_CHANCE = b
+                .comment("Default probability [0..1] that a caster actually casts on each decision (its 'hesitation').",
+                        "1.0 = cast whenever able. A loadout entry's 'cast_chance' overrides this per spell.")
+                .translation(TKEY + "castChance")
+                .defineInRange("castChance", 1.0D, 0.0D, 1.0D);
+        MIN_COOLDOWN_TICKS = b
+                .comment("Hard floor (ticks) applied to every spell cooldown, including explicit per-spell overrides.")
+                .translation(TKEY + "minCooldownTicks")
+                .defineInRange("minCooldownTicks", 20, 0, 1200);
         SUPPORT_HEALTH_THRESHOLD = b
                 .comment("An NPC self-casts SUPPORT spells when its health fraction drops below this (0..1).")
                 .translation(TKEY + "supportHealthThreshold")
@@ -144,6 +156,12 @@ public final class MagicNpcsConfig {
                 .comment("Require an unobstructed line of sight to the target before an NPC casts an attack spell.")
                 .translation(TKEY + "requireLineOfSight")
                 .define("requireLineOfSight", true);
+        CAST_WINDUP_TICKS = b
+                .comment("Default wind-up (ticks) a caster spends tracking its target before an attack spell fires.",
+                        "It re-checks line of sight/range each tick and only casts if the target is still valid.",
+                        "0 = cast instantly (legacy). A loadout entry's 'windup' overrides this per spell.")
+                .translation(TKEY + "castWindupTicks")
+                .defineInRange("castWindupTicks", 6, 0, 100);
         PROTECT_BYSTANDERS = b
                 .comment("Treat nearby non-combatants (villagers, iron golems, players, tamed pets) as protected",
                         "so an NPC will not catch them in an attack spell's line of fire / blast radius.")

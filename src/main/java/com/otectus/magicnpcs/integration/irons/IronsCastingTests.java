@@ -59,9 +59,37 @@ public final class IronsCastingTests {
     }
 
     /**
+     * Negative check for per-spell cast chance: with the global {@code castChance} forced to 0 a
+     * skeleton (shipped loadout) never spends mana over a 100-tick window, even with a pinned,
+     * in-range, visible target. Restores the config before asserting so a failure can't leak it.
+     */
+    public static void castChanceZeroNeverCasts(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        double prev = MagicNpcsConfig.CAST_CHANCE.get();
+        MagicNpcsConfig.CAST_CHANCE.set(0.0);
+
+        Mob caster = (Mob) helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        Zombie target = helper.spawn(EntityType.ZOMBIE, new BlockPos(1, 2, 3));
+        target.setNoAi(true);
+
+        AttributeInstance maxAttr = caster.getAttribute(AttributeRegistry.MAX_MANA.get());
+        double maxMana = maxAttr != null ? maxAttr.getValue() : 0.0;
+
+        helper.startSequence()
+                .thenExecuteFor(100, () -> caster.setTarget(target)) // pin the target every tick
+                .thenExecute(() -> MagicNpcsConfig.CAST_CHANCE.set(prev)) // restore before asserting
+                .thenExecute(() -> helper.assertTrue(
+                        MagicData.getPlayerMagicData(caster).getMana() >= maxMana - 0.5,
+                        "skeleton with castChance=0 must never spend mana"))
+                .thenSucceed();
+    }
+
+    /**
      * Spawn a caster of {@code casterType} and a stationary dummy target, then succeed once
      * the caster's Iron's mana drops below its max — proving a real {@code onCast} happened
-     * (mana is deducted only by our economy, ADR 0001).
+     * (mana is deducted only by our economy, ADR 0001). With the default wind-up this also
+     * exercises the wind-up lifecycle: the cast lands a few ticks after target acquisition.
      */
     private static void runCastTest(GameTestHelper helper, EntityType<?> casterType) {
         // Casting is suppressed on Peaceful (peacefulDisablesCasting); ensure a fighting difficulty.

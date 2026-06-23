@@ -23,6 +23,10 @@ public final class LoadoutJson {
     public static final String MAX_RANGE = "max_range";
     public static final String SAFETY_RADIUS = "safety_radius";
     public static final String ROLE = "role";
+    public static final String CAST_CHANCE = "cast_chance";
+    public static final String COOLDOWN = "cooldown";
+    public static final String COOLDOWN_MULTIPLIER = "cooldown_multiplier";
+    public static final String WINDUP = "windup";
 
     private LoadoutJson() {}
 
@@ -51,6 +55,20 @@ public final class LoadoutJson {
         o.addProperty(MAX_RANGE, entry.maxRange());
         o.addProperty(SAFETY_RADIUS, entry.safetyRadius());
         o.addProperty(ROLE, entry.role().name().toLowerCase(Locale.ROOT));
+        // Optional tuning fields: written only when set, so loadouts that rely on global
+        // defaults round-trip unchanged.
+        if (entry.castChance() != null) {
+            o.addProperty(CAST_CHANCE, entry.castChance());
+        }
+        if (entry.cooldownTicks() != null) {
+            o.addProperty(COOLDOWN, entry.cooldownTicks());
+        }
+        if (entry.cooldownMultiplier() != null) {
+            o.addProperty(COOLDOWN_MULTIPLIER, entry.cooldownMultiplier());
+        }
+        if (entry.windupTicks() != null) {
+            o.addProperty(WINDUP, entry.windupTicks());
+        }
         return o;
     }
 }

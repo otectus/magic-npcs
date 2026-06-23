@@ -60,6 +60,16 @@ public final class MagicNpcsGameTests {
         IronsCastingTests.skeletonCastsMagicMissile(helper);
     }
 
+    /** Cast-chance gate: with castChance forced to 0, a skeleton never spends mana on a cast. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void castChanceZeroNeverCasts(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.castChanceZeroNeverCasts(helper);
+    }
+
     /** Adapter path: a Villager Recruit casts (skips if Recruits is absent). */
     @GameTest(template = "platform", timeoutTicks = 200, required = false)
     public static void recruitCasts(GameTestHelper helper) {

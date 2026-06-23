@@ -104,6 +104,15 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
         List<LoadoutEntry> spells = new ArrayList<>();
         for (JsonElement element : GsonHelper.getAsJsonArray(json, LoadoutJson.SPELLS)) {
             JsonObject o = GsonHelper.convertToJsonObject(element, "spell entry");
+            // Optional tuning fields: absent → null (inherit the global config default at runtime).
+            Double castChance = o.has(LoadoutJson.CAST_CHANCE)
+                    ? Math.max(0.0, Math.min(1.0, GsonHelper.getAsDouble(o, LoadoutJson.CAST_CHANCE))) : null;
+            Integer cooldown = o.has(LoadoutJson.COOLDOWN)
+                    ? Math.max(0, GsonHelper.getAsInt(o, LoadoutJson.COOLDOWN)) : null;
+            Double cooldownMult = o.has(LoadoutJson.COOLDOWN_MULTIPLIER)
+                    ? Math.max(0.0, GsonHelper.getAsDouble(o, LoadoutJson.COOLDOWN_MULTIPLIER)) : null;
+            Integer windup = o.has(LoadoutJson.WINDUP)
+                    ? Math.max(0, GsonHelper.getAsInt(o, LoadoutJson.WINDUP)) : null;
             spells.add(new LoadoutEntry(
                     new ResourceLocation(GsonHelper.getAsString(o, LoadoutJson.SPELL)),
                     Math.max(1, GsonHelper.getAsInt(o, LoadoutJson.LEVEL, 1)),
@@ -111,7 +120,8 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
                     Math.max(0.0, GsonHelper.getAsDouble(o, LoadoutJson.MIN_RANGE, 0.0)),
                     Math.max(0.0, GsonHelper.getAsDouble(o, LoadoutJson.MAX_RANGE, 20.0)),
                     Math.max(0.0, GsonHelper.getAsDouble(o, LoadoutJson.SAFETY_RADIUS, 1.5)),
-                    parseRole(GsonHelper.getAsString(o, LoadoutJson.ROLE, "attack"))
+                    parseRole(GsonHelper.getAsString(o, LoadoutJson.ROLE, "attack")),
+                    castChance, cooldown, cooldownMult, windup
             ));
         }
         if (spells.isEmpty()) {
