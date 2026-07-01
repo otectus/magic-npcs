@@ -60,8 +60,12 @@ public final class MagicNpcsGameTests {
         IronsCastingTests.skeletonCastsMagicMissile(helper);
     }
 
-    /** Cast-chance gate: with castChance forced to 0, a skeleton never spends mana on a cast. */
-    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    /**
+     * Cast-chance gate: with the global castChance forced to 0, a caster never spends mana. Runs in
+     * its own batch — it mutates the shared {@code castChance} config, so isolating it keeps it from
+     * starving the concurrently-running casting tests in the default batch (and vice-versa).
+     */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false, batch = "globalCastChance")
     public static void castChanceZeroNeverCasts(GameTestHelper helper) {
         if (!IronsCompat.isLoaded()) {
             helper.succeed();
@@ -78,6 +82,80 @@ public final class MagicNpcsGameTests {
             return;
         }
         IronsCastingTests.executeConditionGatesCast(helper);
+    }
+
+    /** Aim fix: a caster facing away fires a projectile toward the target on the windup=0 path. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void windupAimsAtTarget(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.windupAimsAtTarget(helper);
+    }
+
+    /**
+     * Focus gate: empty-handed blocks casting; holding a tagged focus allows it. Runs in its own batch
+     * — it toggles the shared {@code requireSpellFocus} config, which would otherwise block the
+     * empty-handed casters in the default batch's casting tests.
+     */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false, batch = "requireFocus")
+    public static void focusGateRequiresHeldFocus(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.focusGateRequiresHeldFocus(helper);
+    }
+
+    /** Bad-id convenience: a bare spell id auto-resolves under irons_spellbooks and casts. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void bareSpellIdAutoNamespaces(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.bareSpellIdAutoNamespaces(helper);
+    }
+
+    /** Per-spell cast_chance=0 blocks casting even when the global castChance is 1. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void perSpellCastChanceZeroNeverCasts(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.perSpellCastChanceZeroNeverCasts(helper);
+    }
+
+    /** Target-data fix: devour (target-entity spell) casts once the bridge supplies TargetEntityCastData. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void devourCastsWithTargetData(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.devourCastsWithTargetData(helper);
+    }
+
+    /** Long-cast lifecycle: a LONG spell (root) fires after its cast time, not instantly. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void longCastCompletesAfterCastTime(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.longCastCompletesAfterCastTime(helper);
+    }
+
+    /** Stomp handling: the forward ground-AoE spawns in front of the caster, toward the target. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void stompAoeFiresForward(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.stompAoeFiresForward(helper);
     }
 
     /** Adapter path: a Villager Recruit casts (skips if Recruits is absent). */

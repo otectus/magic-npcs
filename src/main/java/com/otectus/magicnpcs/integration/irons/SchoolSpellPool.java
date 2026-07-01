@@ -28,7 +28,7 @@ import java.util.Locale;
  */
 public final class SchoolSpellPool {
     private static final String[] SUPPORT_KEYWORDS =
-            {"heal", "cure", "blessing", "regen", "haste", "shield", "ward", "fortify", "wisp"};
+            {"heal", "cure", "blessing", "regen", "haste", "shield", "ward", "fortify"};
 
     private SchoolSpellPool() {}
 

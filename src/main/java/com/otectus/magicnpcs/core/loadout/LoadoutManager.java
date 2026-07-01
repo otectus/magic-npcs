@@ -21,6 +21,7 @@ import net.minecraft.world.entity.npc.Villager;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -43,6 +44,16 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
 
     public LoadoutManager() {
         super(GSON, FOLDER);
+    }
+
+    /** The current immutable loadout snapshot, keyed by entity type — for inspection/validation commands. */
+    public static Map<ResourceLocation, List<SpellcasterLoadout>> snapshot() {
+        return byType;
+    }
+
+    /** The (post-override) loadouts declared for {@code entityType}, or an empty list if none. */
+    public static List<SpellcasterLoadout> loadoutsFor(ResourceLocation entityType) {
+        return byType.getOrDefault(entityType, List.of());
     }
 
     /**
@@ -144,10 +155,97 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
             }
         }
         Map<ResourceLocation, List<SpellcasterLoadout>> frozen = new HashMap<>();
-        result.forEach((type, list) -> frozen.put(type, List.copyOf(list)));
+        result.forEach((type, list) -> {
+            // Apply explicit replace-overrides, then warn about any remaining pooling so a pack
+            // author seeing two spells in-world knows exactly why (and how to override).
+            List<SpellcasterLoadout> resolved = applyOverrides(list);
+            logOverrideDiagnostics(type, list, resolved);
+            frozen.put(type, List.copyOf(resolved));
+        });
         byType = Map.copyOf(frozen);
         int total = frozen.values().stream().mapToInt(List::size).sum();
         MagicNpcs.LOGGER.info("Loaded {} spellcaster loadout(s) across {} entity type(s)", total, frozen.size());
+    }
+
+    /**
+     * Resolve {@code replace} overrides for one entity type's raw loadout list. Loadouts are grouped
+     * by their effective key — the optional {@code profession} (a profession-less loadout is its own
+     * group) — and within each group, if <em>any</em> loadout sets {@code replace}, only the
+     * replace-marked loadouts survive; the rest are dropped. Groups with no replace are left intact
+     * (the 0.4.0 pooling behaviour). Input order is preserved. Deterministic and independent of
+     * datapack load order (no cross-id priority is available here), and pure (no logging) so it is
+     * unit-testable without a Minecraft runtime.
+     */
+    static List<SpellcasterLoadout> applyOverrides(List<SpellcasterLoadout> raw) {
+        boolean replaceProfessionless = false;
+        Set<ResourceLocation> replacedProfessions = new HashSet<>();
+        for (SpellcasterLoadout l : raw) {
+            if (l.replace()) {
+                if (l.profession() == null) {
+                    replaceProfessionless = true;
+                } else {
+                    replacedProfessions.add(l.profession());
+                }
+            }
+        }
+        if (!replaceProfessionless && replacedProfessions.isEmpty()) {
+            return raw; // nothing overrides — keep the full pool
+        }
+        List<SpellcasterLoadout> out = new ArrayList<>(raw.size());
+        for (SpellcasterLoadout l : raw) {
+            boolean groupHasReplace = l.profession() == null
+                    ? replaceProfessionless
+                    : replacedProfessions.contains(l.profession());
+            if (!groupHasReplace || l.replace()) {
+                out.add(l);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Log what override resolution did for one entity type: an info line when {@code replace} dropped
+     * lower-priority loadouts, and a warning per effective key that still has 2+ pooled sources (so the
+     * user can add {@code "replace": true} if pooling wasn't intended).
+     */
+    private static void logOverrideDiagnostics(ResourceLocation type,
+                                               List<SpellcasterLoadout> raw, List<SpellcasterLoadout> resolved) {
+        if (resolved.size() < raw.size()) {
+            String kept = sources(resolved);
+            String dropped = raw.stream()
+                    .filter(l -> !resolved.contains(l))
+                    .map(l -> String.valueOf(l.source()))
+                    .collect(java.util.stream.Collectors.joining(", "));
+            MagicNpcs.LOGGER.info("Spellcaster {}: replace override active — keeping [{}], dropping [{}]",
+                    type, kept, dropped);
+        }
+        // Per effective key, warn when 2+ loadouts remain pooled with no replace.
+        Map<ResourceLocation, List<SpellcasterLoadout>> byProfession = new HashMap<>();
+        List<SpellcasterLoadout> professionless = new ArrayList<>();
+        for (SpellcasterLoadout l : resolved) {
+            if (l.profession() == null) {
+                professionless.add(l);
+            } else {
+                byProfession.computeIfAbsent(l.profession(), k -> new ArrayList<>()).add(l);
+            }
+        }
+        warnPool(type, null, professionless);
+        byProfession.forEach((prof, list) -> warnPool(type, prof, list));
+    }
+
+    private static void warnPool(ResourceLocation type, ResourceLocation profession, List<SpellcasterLoadout> group) {
+        if (group.size() < 2) {
+            return;
+        }
+        String key = profession == null ? type.toString() : type + " (profession " + profession + ")";
+        MagicNpcs.LOGGER.warn("Spellcaster {}: {} loadouts pooled ({}) — each NPC sticky-picks one by "
+                        + "pool_weight. Add \"replace\": true to the loadout that should win to override instead of pool.",
+                key, group.size(), sources(group));
+    }
+
+    private static String sources(List<SpellcasterLoadout> list) {
+        return list.stream().map(l -> String.valueOf(l.source()))
+                .collect(java.util.stream.Collectors.joining(", "));
     }
 
     private static SpellcasterLoadout parse(JsonObject json, ResourceLocation source) {
@@ -159,6 +257,10 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
         double maxMana = Math.max(0.0, GsonHelper.getAsDouble(json, LoadoutJson.MAX_MANA, 100.0));
         double manaRegen = Math.max(0.0, GsonHelper.getAsDouble(json, LoadoutJson.MANA_REGEN, 10.0));
         int poolWeight = Math.max(1, GsonHelper.getAsInt(json, LoadoutJson.POOL_WEIGHT, 1));
+        boolean replace = GsonHelper.getAsBoolean(json, LoadoutJson.REPLACE, false);
+        LoadoutEquipment equipment = json.has(LoadoutJson.EQUIPMENT)
+                ? parseEquipment(GsonHelper.getAsJsonObject(json, LoadoutJson.EQUIPMENT), source)
+                : null;
         LoadoutConditions conditions = json.has(LoadoutJson.CONDITIONS)
                 ? parseConditions(GsonHelper.getAsJsonObject(json, LoadoutJson.CONDITIONS))
                 : null;
@@ -191,7 +293,48 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
         if (spells.isEmpty()) {
             throw new IllegalArgumentException("loadout has no spells");
         }
-        return new SpellcasterLoadout(entityType, profession, maxMana, manaRegen, spells, conditions, poolWeight, source);
+        return new SpellcasterLoadout(entityType, profession, maxMana, manaRegen, spells, equipment, conditions, poolWeight, source, replace);
+    }
+
+    /**
+     * Parse an optional {@code equipment} block. An explicit block opts in, so {@code chance}
+     * defaults to 1.0 (always grant) and {@code only_if_empty} to true. Each hand list accepts
+     * either a bare item-id string (weight 1) or a {@code {item, weight}} object; an unparseable
+     * item id is skipped with a warning, never fatal.
+     */
+    private static LoadoutEquipment parseEquipment(JsonObject o, ResourceLocation source) {
+        List<LoadoutEquipment.WeightedItem> mainhand = parseWeightedItems(o, LoadoutJson.MAINHAND, source);
+        List<LoadoutEquipment.WeightedItem> offhand = parseWeightedItems(o, LoadoutJson.OFFHAND, source);
+        double chance = clamp01(GsonHelper.getAsDouble(o, LoadoutJson.CHANCE, 1.0));
+        boolean onlyIfEmpty = GsonHelper.getAsBoolean(o, LoadoutJson.ONLY_IF_EMPTY, true);
+        return new LoadoutEquipment(mainhand, offhand, chance, onlyIfEmpty);
+    }
+
+    private static List<LoadoutEquipment.WeightedItem> parseWeightedItems(
+            JsonObject o, String key, ResourceLocation source) {
+        if (!o.has(key)) {
+            return List.of();
+        }
+        List<LoadoutEquipment.WeightedItem> out = new ArrayList<>();
+        for (JsonElement e : GsonHelper.getAsJsonArray(o, key)) {
+            String rawId;
+            int weight = 1;
+            if (e.isJsonObject()) {
+                JsonObject io = e.getAsJsonObject();
+                rawId = GsonHelper.getAsString(io, LoadoutJson.ITEM);
+                weight = Math.max(1, GsonHelper.getAsInt(io, LoadoutJson.WEIGHT, 1));
+            } else {
+                rawId = e.getAsString();
+            }
+            ResourceLocation id = ResourceLocation.tryParse(rawId);
+            if (id == null) {
+                MagicNpcs.LOGGER.warn("Loadout {}: equipment.{} has an unparseable item id '{}' — skipping",
+                        source, key, rawId);
+                continue;
+            }
+            out.add(new LoadoutEquipment.WeightedItem(id, weight));
+        }
+        return out;
     }
 
     private static LoadoutEntry.Role parseRole(String raw) {

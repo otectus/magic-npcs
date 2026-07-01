@@ -29,6 +29,7 @@ public final class IronsGoalFactory {
         for (LoadoutEntry entry : loadout.spells()) {
             AbstractSpell spell = IronsBridge.getSpell(entry.spell());
             if (spell == null) {
+                IronsBridge.warnUnknownSpell(loadout.source(), loadout.entityType(), entry.spell());
                 continue;
             }
             (entry.role() == LoadoutEntry.Role.SUPPORT ? support : attack).add(spell);

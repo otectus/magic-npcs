@@ -54,7 +54,7 @@ path — fully offline:
 ```
 
 A headless gametest server launches and **loads the mod** — the boot log line
-`main … Magic NPCs … magicnpcs … 0.3.0 … DONE` (followed by "Started game test
+`main … Magic NPCs … magicnpcs … 0.5.0 … DONE` (followed by "Started game test
 server") proves `mods.toml` is valid, the mixin config loads without crashing when
 its targets are absent (plugin gate → skip), the config registers, and the
 "Iron's absent → disabled, no crash" path holds. (This is verified.)
@@ -111,8 +111,8 @@ server config loads (a dev-only hard error). Now guarded with `ForgeConfigSpec.i
 Everything must be in production/SRG space for Iron's mixins to work, so run the **built
 jar** in a real Forge 1.20.1 (47.4.0+) instance — the normal end-user flow:
 
-1. `./gradlew build` → `build/libs/magicnpcs-0.3.0.jar`.
-2. Into a Forge **47.4.16** client/server `mods/` folder, drop `magicnpcs-0.3.0.jar` + the
+1. `./gradlew build` → `build/libs/magicnpcs-0.5.0.jar`.
+2. Into a Forge **47.4.16** client/server `mods/` folder, drop `magicnpcs-0.5.0.jar` + the
    **production** jars for Iron's `1.20.1-3.15.x`, **GeckoLib 4.8.3 (forge)**, **Curios
    5.14.1+1.20.1**, **PlayerAnimator 1.0.2-rc1+1.20**, and (optional) **Recruits 1.15.0**.
    (`libs/geckolib-4.8.3.jar` and `libs/recruits-1.20.1-1.15.0.jar` are already the

@@ -17,10 +17,15 @@ import java.util.List;
  * @param maxMana    base value applied to Iron's {@code MAX_MANA} attribute on spawn
  * @param manaRegen  base value applied to Iron's {@code MANA_REGEN} attribute on spawn
  * @param spells     the spells this type may cast
+ * @param equipment  optional weighted starting gear granted on spawn; {@code null} = use the global
+ *                   focus-gear behaviour ({@code equipment.spawnWithGearChance} + the spell_focuses tag)
  * @param conditions optional world-context gate (dimension/biome/difficulty/time/…); {@code null} = always
  * @param poolWeight relative weight when several loadouts match one mob and form a pick-one-per-NPC pool
  * @param source     the datapack file id this loadout was loaded from; used as the stable identity for
  *                   the sticky per-NPC pool pick. {@code null} for in-code loadouts (data generator)
+ * @param replace    when {@code true}, this loadout overrides (clears) all non-replace loadouts that
+ *                   share its effective key (entity type + optional profession) at load time, instead of
+ *                   pooling with them — the explicit escape hatch for "my datapack wins" (0.5.0)
  */
 public record SpellcasterLoadout(
         ResourceLocation entityType,
@@ -28,23 +33,25 @@ public record SpellcasterLoadout(
         double maxMana,
         double manaRegen,
         List<LoadoutEntry> spells,
+        LoadoutEquipment equipment,
         LoadoutConditions conditions,
         int poolWeight,
-        ResourceLocation source
+        ResourceLocation source,
+        boolean replace
 ) {
     /** Convenience for a loadout that applies to a whole entity type (no profession scoping). */
     public SpellcasterLoadout(ResourceLocation entityType, double maxMana, double manaRegen, List<LoadoutEntry> spells) {
         this(entityType, null, maxMana, manaRegen, spells);
     }
 
-    /** Convenience for a profession-scoped loadout without context conditions or pooling. */
+    /** Convenience for a profession-scoped loadout without equipment, context conditions, or pooling. */
     public SpellcasterLoadout(ResourceLocation entityType, ResourceLocation profession,
                               double maxMana, double manaRegen, List<LoadoutEntry> spells) {
-        this(entityType, profession, maxMana, manaRegen, spells, null, 1, null);
+        this(entityType, profession, maxMana, manaRegen, spells, null, null, 1, null, false);
     }
 
     /** A copy of this loadout tagged with the datapack file it came from (set on load). */
     public SpellcasterLoadout withSource(ResourceLocation src) {
-        return new SpellcasterLoadout(entityType, profession, maxMana, manaRegen, spells, conditions, poolWeight, src);
+        return new SpellcasterLoadout(entityType, profession, maxMana, manaRegen, spells, equipment, conditions, poolWeight, src, replace);
     }
 }

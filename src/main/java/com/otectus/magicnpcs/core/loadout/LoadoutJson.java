@@ -29,9 +29,19 @@ public final class LoadoutJson {
     public static final String COOLDOWN_MULTIPLIER = "cooldown_multiplier";
     public static final String WINDUP = "windup";
 
+    // Per-loadout weighted starting equipment (0.5.0). All optional.
+    public static final String EQUIPMENT = "equipment";
+    public static final String MAINHAND = "mainhand";
+    public static final String OFFHAND = "offhand";
+    public static final String ITEM = "item";
+    public static final String CHANCE = "chance";
+    public static final String ONLY_IF_EMPTY = "only_if_empty";
+
     // Loadout-level context gate + pooling (0.4.0).
     public static final String CONDITIONS = "conditions";
     public static final String POOL_WEIGHT = "pool_weight";
+    // Explicit override (0.5.0): clears lower-priority loadouts for the same entity_type+profession key.
+    public static final String REPLACE = "replace";
     public static final String COND_DIMENSIONS = "dimensions";
     public static final String COND_BIOMES = "biomes";
     public static final String COND_DIFFICULTIES = "difficulties";
@@ -64,6 +74,12 @@ public final class LoadoutJson {
         // Optional pooling/context fields: written only when non-default so existing loadouts round-trip unchanged.
         if (loadout.poolWeight() != 1) {
             o.addProperty(POOL_WEIGHT, loadout.poolWeight());
+        }
+        if (loadout.replace()) {
+            o.addProperty(REPLACE, true);
+        }
+        if (loadout.equipment() != null) {
+            o.add(EQUIPMENT, toJson(loadout.equipment()));
         }
         if (loadout.conditions() != null) {
             o.add(CONDITIONS, toJson(loadout.conditions()));
@@ -109,6 +125,35 @@ public final class LoadoutJson {
             o.add(COND_MOON_PHASES, phases);
         }
         return o;
+    }
+
+    public static JsonObject toJson(LoadoutEquipment e) {
+        JsonObject o = new JsonObject();
+        if (e.mainhand() != null && !e.mainhand().isEmpty()) {
+            o.add(MAINHAND, weightedItems(e.mainhand()));
+        }
+        if (e.offhand() != null && !e.offhand().isEmpty()) {
+            o.add(OFFHAND, weightedItems(e.offhand()));
+        }
+        o.addProperty(CHANCE, e.chance());
+        o.addProperty(ONLY_IF_EMPTY, e.onlyIfEmpty());
+        return o;
+    }
+
+    private static JsonArray weightedItems(java.util.List<LoadoutEquipment.WeightedItem> items) {
+        JsonArray arr = new JsonArray();
+        for (LoadoutEquipment.WeightedItem w : items) {
+            // Weight 1 round-trips as the bare-string shorthand; anything else as {item, weight}.
+            if (w.weight() == 1) {
+                arr.add(new JsonPrimitive(w.item().toString()));
+            } else {
+                JsonObject io = new JsonObject();
+                io.addProperty(ITEM, w.item().toString());
+                io.addProperty(WEIGHT, w.weight());
+                arr.add(io);
+            }
+        }
+        return arr;
     }
 
     private static JsonArray stringArray(java.util.List<String> values) {

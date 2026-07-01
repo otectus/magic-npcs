@@ -1,5 +1,9 @@
 # Magic NPCs — Completion Audit & Release-Readiness Report
 
+> **Historical snapshot (0.1.1 → 0.3.0 review pass).** This report is not kept current with each
+> release — see [`CHANGELOG.md`](CHANGELOG.md) for the authoritative, up-to-date record (current
+> release: 0.5.0).
+
 **Mod:** Magic NPCs (`magicnpcs`) · **MC:** 1.20.1 · **Loader:** Forge 47.4.16 ·
 **Java:** 17 · **Version:** 0.1.1 → release-hardening pass
 

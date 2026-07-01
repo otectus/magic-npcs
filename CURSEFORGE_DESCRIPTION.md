@@ -9,8 +9,11 @@ spellcaster, with first-class support for **Villager Recruits** and a per-NPC
 
 - **Datapack-driven.** Drop a small JSON in `data/<pack>/spellcasters/` naming an
   entity type and a list of Iron's spells — that mob now casts them. No tags, no
-  add-on mods. Shipped loadouts make Recruits (and, as an example, skeletons) cast
-  out of the box, and any pack can override them.
+  add-on mods. Shipped loadouts cover **optional NPC mods** (Recruits, Guard
+  Villagers) and stay inert unless that mod is installed — vanilla mobs cast nothing
+  until you opt them in (copy the skeleton example below). When two datapacks target
+  one entity they **pool** by default; add `"replace": true` to override cleanly.
+  `/magicnpcs loadout` and `/magicnpcs validate` show exactly what each mob resolves to.
 - **Magic schools (recruits & villagers).** Assign each individual recruit or villager
   one of the nine Iron's schools — fire, ice, lightning, holy, ender, blood, evocation,
   nature, eldritch. Its spell pool is built **dynamically** from that school, so it

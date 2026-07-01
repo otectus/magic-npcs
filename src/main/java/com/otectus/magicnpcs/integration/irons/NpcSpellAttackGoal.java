@@ -6,6 +6,7 @@ import com.otectus.magicnpcs.core.adapter.NpcAdapter;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
 import com.otectus.magicnpcs.core.feedback.Telegraphs;
 import com.otectus.magicnpcs.core.loadout.CastCondition;
+import com.otectus.magicnpcs.core.loadout.CooldownResolver;
 import com.otectus.magicnpcs.core.loadout.LoadoutEntry;
 import com.otectus.magicnpcs.core.loadout.SpellcasterLoadout;
 import com.otectus.magicnpcs.core.util.LineOfFire;
@@ -13,6 +14,7 @@ import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.goal.Goal;
@@ -53,9 +55,19 @@ public class NpcSpellAttackGoal extends Goal {
                 continue;
             }
             AbstractSpell spell = IronsBridge.getSpell(entry.spell());
-            if (spell != null) {
-                spells.add(new Resolved(entry, spell));
+            if (spell == null) {
+                IronsBridge.warnUnknownSpell(loadout.source(), loadout.entityType(), entry.spell());
+                continue;
             }
+            SpellCompat.Category category = SpellCompat.categoryOf(spell);
+            if (!SpellCompat.supportedForMob(category)) {
+                com.otectus.magicnpcs.MagicNpcs.LOGGER.warn(
+                        "Loadout {} ({}): spell {} is not castable by a mob — {}; skipping it.",
+                        loadout.source(), loadout.entityType(), entry.spell(),
+                        SpellCompat.unsupportedReason(category));
+                continue;
+            }
+            spells.add(new Resolved(entry, spell));
         }
         setFlags(EnumSet.of(Flag.LOOK));
     }
@@ -161,6 +173,10 @@ public class NpcSpellAttackGoal extends Goal {
 
     @Override
     public void stop() {
+        if (MagicNpcsConfig.DEBUG_LOGGING.get() && chosen != null && windupRemaining > 0) {
+            com.otectus.magicnpcs.MagicNpcs.LOGGER.info("[windup] {} interrupted casting {} with {} ticks left",
+                    EntityType.getKey(mob.getType()), chosen.entry().spell(), windupRemaining);
+        }
         // Reached on a clean finish (fire() already cleared state) or an interrupted wind-up
         // (target lost): in the latter case no cast happened, so no cooldown is consumed.
         endAttempt();
@@ -173,11 +189,19 @@ public class NpcSpellAttackGoal extends Goal {
             return;
         }
         if (chosen.entry().role() == LoadoutEntry.Role.ATTACK && target != null) {
-            mob.getLookControl().setLookAt(target, 30.0F, 30.0F);
+            // LookControl only applies its rotation later in the tick (after the goal runs), so a
+            // setLookAt here is stale at cast time — Iron's projectile spells read getLookAngle()
+            // during onCast. Snap the mob's rotation at the target NOW so the spell fires on-aim,
+            // even on the windup=0 instant path.
+            snapFacing(target);
         }
-        mob.swing(InteractionHand.MAIN_HAND);
-        IronsBridge.cast(mob, chosen.spell(), chosen.entry().level());
-        cooldowns.put(chosen.entry().spell(), resolveCooldown(chosen));
+        // Pass the target so target-locked spells (root/devour/wisp) get their TargetEntityCastData.
+        boolean cast = IronsBridge.cast(mob, target, chosen.spell(), chosen.entry().level());
+        if (cast) {
+            mob.swing(InteractionHand.MAIN_HAND);
+            cooldowns.put(chosen.entry().spell(), resolveCooldown(chosen));
+        }
+        // Space the next decision regardless, so a spell that skips (e.g. unmet pre-cast) doesn't spam.
         decisionTimer = MagicNpcsConfig.DECISION_INTERVAL_TICKS.get();
         endAttempt();
     }
@@ -187,6 +211,36 @@ public class NpcSpellAttackGoal extends Goal {
         this.chosen = null;
         this.target = null;
         this.windupRemaining = 0;
+    }
+
+    /**
+     * Force the caster's yaw/pitch (head + body) straight at the target's eyes immediately, so the
+     * look vector Iron's reads in {@code onCast} points at the target this very tick. {@code LookControl}
+     * defers its rotation until after the goal tick, so it can't be relied on for the cast frame; we
+     * set the rotations directly (and the {@code *O} previous-frame values to avoid an interpolation
+     * artifact). Vertical aim (pitch) and horizontal aim (yaw, head + body) are all covered.
+     */
+    private void snapFacing(LivingEntity t) {
+        double dx = t.getX() - mob.getX();
+        double dz = t.getZ() - mob.getZ();
+        double dy = t.getEyeY() - mob.getEyeY();
+        double horiz = Math.sqrt(dx * dx + dz * dz);
+        float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
+        float pitch = (float) -Math.toDegrees(Math.atan2(dy, horiz));
+        mob.setYRot(yaw);
+        mob.yRotO = yaw;
+        mob.yBodyRot = yaw;
+        mob.yBodyRotO = yaw;
+        mob.setYHeadRot(yaw);
+        mob.yHeadRotO = yaw;
+        mob.setXRot(pitch);
+        mob.xRotO = pitch;
+        if (MagicNpcsConfig.DEBUG_LOGGING.get()) {
+            com.otectus.magicnpcs.MagicNpcs.LOGGER.info(
+                    "[aim] {} snapped to yaw={} pitch={} before casting {}",
+                    EntityType.getKey(mob.getType()), String.format("%.1f", yaw), String.format("%.1f", pitch),
+                    chosen.entry().spell());
+        }
     }
 
     /** Re-validate an in-flight wind-up: ATTACK casts need a live, allowed, reachable, visible target. */
@@ -296,22 +350,29 @@ public class NpcSpellAttackGoal extends Goal {
         return e.castChance() != null ? e.castChance() : MagicNpcsConfig.CAST_CHANCE.get();
     }
 
+    /**
+     * Wind-up ticks before the cast lands. An explicit per-spell {@code windup} wins; otherwise a
+     * long (channelled) spell channels for its full Iron's cast time (so root/wisp/stomp complete
+     * after their cast time rather than firing instantly), and instant spells use the global wind-up.
+     */
     private int resolveWindup(Resolved r) {
         Integer w = r.entry().windupTicks();
-        return w != null ? w : MagicNpcsConfig.CAST_WINDUP_TICKS.get();
+        if (w != null) {
+            return w;
+        }
+        int castTime = IronsBridge.castTime(r.spell(), r.entry().level());
+        return castTime > 0 ? castTime : MagicNpcsConfig.CAST_WINDUP_TICKS.get();
     }
 
     /** Precedence: explicit per-spell ticks > per-spell multiplier > global multiplier; always floored. */
     private int resolveCooldown(Resolved r) {
-        int floor = MagicNpcsConfig.MIN_COOLDOWN_TICKS.get();
         LoadoutEntry e = r.entry();
-        if (e.cooldownTicks() != null) {
-            return Math.max(e.cooldownTicks(), floor);
-        }
-        double mult = e.cooldownMultiplier() != null
-                ? e.cooldownMultiplier()
-                : MagicNpcsConfig.COOLDOWN_MULTIPLIER.get();
-        return Math.max((int) (r.spell().getSpellCooldown() * mult), floor);
+        return CooldownResolver.resolve(
+                e.cooldownTicks(),
+                e.cooldownMultiplier(),
+                MagicNpcsConfig.COOLDOWN_MULTIPLIER.get(),
+                r.spell().getSpellCooldown(),
+                MagicNpcsConfig.MIN_COOLDOWN_TICKS.get());
     }
 
     private void tickCooldowns() {

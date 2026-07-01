@@ -111,6 +111,60 @@ loadout's **`entity_type`** is what matters — not the file name or namespace.
 The four tuning fields (`cast_chance`/`cooldown`/`cooldown_multiplier`/`windup`) are optional;
 omit them to inherit the matching global config default. `condition` is also optional.
 
+#### Cooldowns, precisely (how to make a spell fire more/less often)
+
+There are two ways to set a spell's cooldown. **20 ticks = 1 second.**
+
+- **`cooldown`** — an **exact** cooldown in **ticks**. This is the clearest option and what we
+  recommend for modpack authors. `"cooldown": 100` = a 5-second cooldown, full stop.
+- **`cooldown_multiplier`** — multiplies the spell's **Iron's default** cooldown.
+  - A multiplier **above `1.0` makes the spell _slower_** (longer cooldown).
+  - A multiplier **below `1.0` makes the spell _faster_** (shorter cooldown).
+  - So raising `cooldown_multiplier` does **not** reduce the cooldown — it increases it.
+
+`cooldown` always wins over `cooldown_multiplier`. Every result is floored by the global
+`balance.minCooldownTicks` (default 20), so that setting can stop a cooldown going below a floor.
+
+**Example — a Phantom that casts `echoing_strikes` every 5 seconds** (`echoing_strikes`'s Iron's
+default is ~60 s, but the explicit `cooldown` overrides it entirely):
+
+```json
+{
+  "entity_type": "minecraft:phantom",
+  "max_mana": 100,
+  "mana_regen": 10,
+  "spells": [
+    { "spell": "irons_spellbooks:echoing_strikes", "level": 1, "role": "attack", "cooldown": 100 }
+  ]
+}
+```
+
+The multiplier form `"cooldown_multiplier": 0.0833` (≈ 5⁄60) reaches roughly the same 5 seconds, but
+explicit `"cooldown": 100` is clearer — prefer it.
+
+#### Finding valid spell IDs
+
+`spell` is an Iron's registry id, always namespaced as `irons_spellbooks:<id>`. To discover them:
+
+- Run **`/magicnpcs spells`** in-game (or `/magicnpcs spells fire` to filter) for the live list with
+  each spell's school, rarity, default cooldown, and a mob-friendly hint.
+- See [`docs/irons_spell_ids.md`](docs/irons_spell_ids.md) for a generated reference, and
+  [`docs/mob-friendly-spells.md`](docs/mob-friendly-spells.md) for which spells suit mobs.
+
+**Watch the namespace.** A bare id like `devour` is read as `minecraft:devour` (not a spell). Magic
+NPCs auto-retries bare ids under `irons_spellbooks:`, and logs a clear warning for ids it still can't
+resolve — but write the full id. Frequently-confused examples: `irons_spellbooks:blight` is correct
+as-is; `devour` → `irons_spellbooks:devour`; `fangward` → `irons_spellbooks:fang_ward`.
+
+#### Four different "chance" knobs (don't mix them up)
+
+| Knob | Controls |
+|------|----------|
+| `weight` (per spell) | **which** spell is picked among the currently-eligible ones |
+| `cast_chance` (per spell) | **whether** the NPC actually casts after that spell is picked (a hesitation) |
+| `equipment.chance` / `equipment.spawnWithGearChance` | **whether a mob gets casting gear** on spawn |
+| `schools.*.casterChance` | **whether a generated school-caster exists** at all |
+
 ### 3. A worked example (annotated)
 
 A multi-spell "battlemage" mixing a ranged nuke, a spammable bolt, and self-healing:
@@ -210,6 +264,59 @@ Place that at `data/magicnpcs/tags/items/spell_focuses.json` in your pack. With
 `schools.schoolAwareFocus = true`, a school caster may instead hold a focus for **its own**
 school (e.g. an Iron's *fire focus* for a fire NPC).
 
+**Concrete example — only cast while holding a Pyrium Staff.** Restrict casting to a specific
+weapon by putting just that item in the tag and enabling `equipment.requireSpellFocus`:
+
+```json
+{
+  "replace": false,
+  "values": [
+    "irons_spellbooks:pyrium_staff"
+  ]
+}
+```
+
+> **Verify the item id.** `irons_spellbooks:pyrium_staff` is correct in current Iron's, but item ids
+> vary by version. Confirm yours with `/give @s irons_spellbooks:pyrium_staff`, by hovering the item
+> with advanced tooltips (F3+H), or in JEI/EMI. The tag entry is silently ignored if the id doesn't
+> resolve.
+
+### 7b. Weighted starting equipment (optional)
+
+A loadout may grant gear on spawn with a per-loadout `equipment` block — useful with
+`requireSpellFocus`, or just to arm casters with staves. It's fully optional and backward-compatible:
+omit it and the global `equipment.spawnWithGearChance` behaviour is unchanged.
+
+```json
+{
+  "entity_type": "minecraft:skeleton",
+  "max_mana": 100,
+  "mana_regen": 10,
+  "equipment": {
+    "mainhand": [
+      { "item": "irons_spellbooks:pyrium_staff",    "weight": 5 },
+      { "item": "irons_spellbooks:graybeard_staff", "weight": 1 }
+    ],
+    "offhand": [ "minecraft:shield" ],
+    "chance": 0.35,
+    "only_if_empty": true
+  },
+  "spells": [
+    { "spell": "irons_spellbooks:magic_missile", "level": 1, "role": "attack",
+      "cooldown": 100, "windup": 10 }
+  ]
+}
+```
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `mainhand` / `offhand` | *(none)* | weighted item list; each entry is a bare `"id"` (weight 1) or `{ "item", "weight" }` |
+| `chance` | `1.0` | probability [0..1] the gear is granted at all |
+| `only_if_empty` | `true` | only fill a hand that's currently empty (won't overwrite existing gear) |
+
+A higher `weight` is picked proportionally more often (here the Pyrium Staff appears ~5× as often as
+the Graybeard Staff). Verify item ids the same way as focus items above.
+
 ### 8. Contextual loadouts (`conditions`)
 
 Add a loadout-level `"conditions"` object to apply a loadout **only** in certain world
@@ -260,7 +367,7 @@ gate; for an ATTACK spell it is an extra gate on top of range/line-of-sight.
       "condition": { "enemies_within": 3, "enemies_radius": 6 } },
     { "spell": "irons_spellbooks:magic_missile", "level": 1, "weight": 3, "role": "attack",
       "condition": { "target_hp_below": 0.35 } },
-    { "spell": "irons_spellbooks:ascension", "level": 1, "role": "support",
+    { "spell": "irons_spellbooks:oakskin", "level": 1, "role": "support",
       "condition": { "self_hp_below": 0.4, "when_recently_hurt": true } }
   ]
 }
@@ -277,12 +384,12 @@ A satisfied condition can also raise a spell's pick weight via
 `balance`/`reactive.matchedConditionWeightBonus` (default 1.0 = no bias). Set
 `reactive.enabled = false` to ignore all conditions (spells fall back to role/range only).
 
-### 10. Loadout pools (variety)
+### 10. Loadout pools vs. override (`replace`)
 
-Several loadouts may target the **same** entity type (and profession). Each NPC sticky-picks
-one variant by `pool_weight` (persisted, so it does not change on reload), giving natural
-variety — e.g. some skeletons are fire-mages, others ice-mages. Combine with `conditions`
-for "this variant only in the nether", etc.
+Several loadouts may target the **same** effective key (`entity_type` + optional `profession`).
+By default they **pool**: each NPC sticky-picks one variant by `pool_weight` (persisted, so it does
+not change on reload), giving natural variety — e.g. some skeletons are fire-mages, others
+ice-mages. Combine with `conditions` for "this variant only in the nether", etc.
 
 ```json
 { "entity_type": "minecraft:skeleton", "pool_weight": 3, "max_mana": 100, "mana_regen": 10,
@@ -295,13 +402,46 @@ for "this variant only in the nether", etc.
 
 > Two files for the same type that used to be a "last one wins" override are now **pooled**.
 
+**To override instead of pool** — e.g. to replace a loadout shipped by another datapack — add a
+root-level `"replace": true`. At load time it clears *all* non-replace loadouts for the same
+effective key, and only the replace-marked loadout(s) remain:
+
+```json
+{ "entity_type": "minecraft:skeleton", "replace": true, "max_mana": 100, "mana_regen": 10,
+  "spells": [ { "spell": "irons_spellbooks:icicle", "level": 1, "role": "attack" } ] }
+```
+
+When two datapacks target one key and none set `replace`, Magic NPCs logs a warning naming the
+sources. Run **`/magicnpcs validate`** to see pooled/duplicate keys and bad ids, and
+**`/magicnpcs loadout entity <target>`** (or `loadout id <entity_type>`) to see exactly which spells
+a mob resolves to and why each is or isn't eligible.
+
+**OpenLoader / modpacks:** drop your loadout at
+`config/openloader/data/<pack>/data/<pack>/spellcasters/<name>.json` (the file name is free; the
+`entity_type` field is the opt-in). Add `"replace": true` to win over anything else targeting that
+entity. Vanilla skeletons cast nothing by default — see the example below.
+
 ### 11. See also
 
 - **Shipped loadouts** (great references) — bundled in the jar under
-  `data/magicnpcs/spellcasters/`: `skeleton`, `recruit`, `bowman`, `crossbowman`, `captain`,
-  `guard`. (They are produced by the mod's data generator; same schema as yours.)
+  `data/magicnpcs/spellcasters/`: `recruit`, `bowman`, `crossbowman`, `captain`, `guard`. These all
+  target **optional NPC mods** (Recruits / Guard Villagers), so they stay inert unless that mod is
+  installed. There is **no** active `minecraft:skeleton` loadout — an example lives at
+  [`docs/loadouts/examples/skeleton.json`](docs/loadouts/examples/skeleton.json) to copy into your
+  own datapack.
 - [`docs/loadouts/README.md`](docs/loadouts/README.md) — copy-paste examples for optional NPC mods.
 - [`docs/schools.md`](docs/schools.md) — the per-NPC magic-school system.
+- [`docs/irons_spell_ids.md`](docs/irons_spell_ids.md) — valid Iron's spell ids by school.
+- [`docs/mob-friendly-spells.md`](docs/mob-friendly-spells.md) — which spells work well on mobs,
+  including the target-locked (`root`, `devour`, `wisp`) and forward-AoE (`stomp`) spells.
+
+### Aiming: how casters face their target
+
+`attack` spells aim before they fire. During the `windup` the caster turns toward the target and
+re-checks line of sight and range each tick, and **immediately before the spell is released the
+caster's facing is snapped onto the target** — so projectile spells launch *at* the target rather
+than in a stale direction, even with `windup: 0`. Give attack spells a `windup` of ~10–20 ticks for a
+visible, telegraphed aim; `support`/self-cast spells don't aim at enemies.
 
 ## Supported NPC mods
 

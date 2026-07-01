@@ -3,6 +3,100 @@
 All notable changes to Magic NPCs are documented here. Versions follow
 `MAJOR.MINOR.PATCH`; this is a pre-1.0 line.
 
+## [0.5.0] — predictable overrides, broken-spell fixes, aimed casting, spell discovery
+
+Predictability and pack-author control for Iron's casters. The bundled skeleton example no longer
+ships as active jar data (so modpack datapacks own skeleton behaviour cleanly), datapacks can now
+**explicitly override** a shipped loadout, and the long/target-locked spells that silently did
+nothing for mobs — `root`, `devour`, `wisp`, `stomp` — now cast correctly. Plus the earlier 0.5.0
+work: projectile spells fire **at** the target, commands to list spells and inspect/validate
+loadouts, weighted starting gear, and documented cooldowns. Every new field is optional and backward
+compatible, and the offline `bootSanity` GameTest still passes with neither Iron's nor Recruits.
+
+### Added
+- **`/magicnpcs spells [filter]`** — list the valid Iron's spell registry ids with school, rarity,
+  default cooldown, cast type, and a mob-friendly hint (filter by substring). Read-only; available
+  whenever Iron's is present. Backed by the new generated reference
+  [`docs/irons_spell_ids.md`](docs/irons_spell_ids.md).
+- **`/magicnpcs loadout entity <targets>` / `loadout id <entity_type>`** — show the resolved
+  spellcaster loadout(s) for a mob or entity type: source datapack, pool/replace status, and per-spell
+  level, weight, range, role, safety radius, resolved cooldown, compat category, and any reason a
+  spell would be skipped (unknown/disabled id, needs a target, out of range). Op-only, read-only.
+- **`/magicnpcs validate`** — scan all loaded `spellcasters/*.json` and report duplicate/pooled keys
+  (with the exact "add `replace: true` to override" guidance), unknown/disabled spell ids, spells that
+  need target data, and suspicious ranges (e.g. a forward ground-AoE like `stomp` with a long
+  `max_range`). Built for OpenLoader/modpack authors.
+- **`replace` loadout flag** — a root-level `"replace": true` makes a loadout override (clear) all
+  other non-replace loadouts that share its effective key (`entity_type` + optional `profession`) at
+  load time, instead of pooling with them. The explicit "my datapack wins" escape hatch on top of
+  0.4.0's pooling.
+- **Weighted starting equipment** — an optional per-loadout `equipment` block grants gear on spawn:
+  `mainhand`/`offhand` weighted item lists (bare `"id"` or `{ "item", "weight" }`), plus `chance`
+  (default 1.0) and `only_if_empty` (default true). Omit the block to keep the existing global
+  `equipment.spawnWithGearChance` behaviour. Useful with `requireSpellFocus` to arm casters with a
+  Pyrium Staff or other focus.
+- **Mob-friendly spell guide** ([`docs/mob-friendly-spells.md`](docs/mob-friendly-spells.md)):
+  curated projectile / self-support / melee / AoE / not-recommended categories, with example
+  projectile- and melee-mob loadouts.
+- **Cooldown documentation** in the README: explicit `cooldown` (ticks) vs `cooldown_multiplier`
+  (scales the Iron's default — bigger = slower), the `minCooldownTicks` floor, 20 ticks = 1 s, and a
+  worked Phantom `echoing_strikes` 5-second example.
+
+### Fixed
+- **Target-locked spells now work for mobs (`root`, `devour`, `wisp`).** These read a
+  `TargetEntityCastData` target during `onCast`; Magic NPCs never set one, so they silently did
+  nothing. The casting bridge now attaches the mob's target before the pre-cast check and cast.
+- **Long (channelled) spells now complete (`root`, `wisp`, `stomp`).** These are `CastType.LONG`, but
+  the mob path only ever fired a single immediate `onCast`. The goal now channels for the spell's
+  Iron's cast time and then runs `onCast` + `onServerCastComplete`, so the spell resolves correctly.
+- **Stomp fires forward.** As a `CastType.LONG` forward ground-AoE, `stomp` now channels and lands its
+  AoE in front of the caster (which faces the target throughout the wind-up); `/magicnpcs validate`
+  flags an unsuitably long `max_range`, and the docs recommend `max_range ≤ 5`, `safety_radius ~4`.
+- **Unsupported spells are skipped, not mis-fired.** A spell a mob can't be given the data for
+  (multi-target / player-only) is dropped from the loadout with a clear log line instead of casting
+  into the void.
+- **Aimed casting / stale projectile direction.** The casting goal relied on `LookControl`, whose
+  rotation is applied *after* the goal runs — so on the instant (`windup = 0`) path a projectile
+  spell fired in the caster's previous facing. The goal now snaps the caster's yaw/pitch (head **and**
+  body) onto the target immediately before `onCast`, so spells launch on-aim regardless of wind-up.
+- **Silent unknown spell ids.** A loadout referencing an unresolved spell id used to fail invisibly.
+  It now logs a clear warning naming the file, entity, field, and bad id, and a bare id (no namespace)
+  is auto-retried under `irons_spellbooks:` (so `devour` resolves to `irons_spellbooks:devour`).
+
+### Changed
+- **The bundled `minecraft:skeleton` loadout is no longer shipped as active jar data.** An active
+  vanilla-mob default silently changed skeleton behaviour and pooled with (and override-fought) a
+  modpack's own skeleton datapack. It now lives as a copy-paste example at
+  [`docs/loadouts/examples/skeleton.json`](docs/loadouts/examples/skeleton.json). The shipped
+  loadouts that remain (`recruit`, `bowman`, `crossbowman`, `captain`, `guard`) all target optional
+  NPC mods, so they stay inert unless that mod is installed.
+- **Override semantics are explicit and logged.** Multiple datapacks targeting one entity type still
+  pool by default (0.4.0 behaviour), but a load-time warning now names the contributing sources, and
+  the new `replace` flag gives deterministic override. `/magicnpcs validate` reports both.
+- `NpcSpellAttackGoal.resolveCooldown` now delegates to a pure, unit-tested `CooldownResolver`
+  (no behaviour change): explicit ticks > per-spell multiplier > global multiplier, always floored.
+
+### Tests
+- New JUnit tests: `LoadoutResolveTest` (pooling vs `replace` override, profession scoping),
+  `SpellcasterLoadoutProviderTest` (the jar ships no active vanilla-mob loadout), `CooldownResolverTest`,
+  and `WeightedItemPickTest`. New runtime GameTests: `devourCastsWithTargetData`,
+  `longCastCompletesAfterCastTime` (root), `stompAoeFiresForward`, plus the earlier `windupAimsAtTarget`,
+  `focusGateRequiresHeldFocus`, `bareSpellIdAutoNamespaces`, and `perSpellCastChanceZeroNeverCasts`.
+  The two config-mutating GameTests run in isolated batches so they don't perturb the casting tests.
+
+### Notes
+- Fully backward compatible **for datapacks** — every loadout field is optional. **Migration for
+  0.4.0 users:** Magic NPCs 0.4.0 shipped an active `minecraft:skeleton` example loadout; it has been
+  removed from active jar data so modpack datapacks control skeleton behaviour cleanly. If you relied
+  on vanilla skeletons casting, copy [`docs/loadouts/examples/skeleton.json`](docs/loadouts/examples/skeleton.json)
+  into your own datapack. To make your datapack override a pooled/shipped loadout instead of stacking
+  with it, add `"replace": true`. Use `/magicnpcs loadout` and `/magicnpcs validate` to see exactly
+  what each mob resolves to.
+- If you were confused by cooldowns on an older build: raising `cooldown_multiplier` *increases*
+  cooldown; use a value below 1.0 to speed a spell up, or set an explicit `"cooldown"` in ticks.
+- Spell ids and item ids are version-specific to your installed Iron's build; `/magicnpcs spells` and
+  `/give` are the authoritative sources.
+
 ## [0.4.0] — reactive casting, telegraphs, contextual & pooled loadouts
 
 Casters that read the moment and fit the pack: per-spell reactive conditions, a visible

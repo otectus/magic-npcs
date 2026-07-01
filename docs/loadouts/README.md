@@ -16,6 +16,20 @@ are documented from public sources and **must be verified for your exact version
    their toggle is enabled** — a deliberate, modpack-safe default.
 4. `/reload`.
 
+## Vanilla mobs (e.g. skeletons) and OpenLoader
+
+Magic NPCs ships **no** active loadout for vanilla mobs, so vanilla skeletons cast nothing until a
+datapack opts them in. Copy [`examples/skeleton.json`](examples/skeleton.json) into a datapack at
+`data/<your_pack>/spellcasters/skeleton.json`, or for an **OpenLoader** pack at
+`config/openloader/data/<pack>/data/<pack>/spellcasters/skeleton.json`. Vanilla mobs need no compat
+toggle.
+
+If another datapack (or an older Magic NPCs build) also defines that entity type, the loadouts
+**pool** by default (each mob picks one). Add a root-level `"replace": true` to make yours override
+the others for that `entity_type` (+ optional `profession`) instead of stacking. Use
+`/magicnpcs validate` to spot pooled/duplicate keys and `/magicnpcs loadout entity <target>` to see
+what a given mob actually resolves to.
+
 ## Known limitations
 
 - **Profession-scoped casting (vanilla, More Villagers / VillagersPlus):** loadouts key on
@@ -116,11 +130,15 @@ Any spell entry accepts optional tuning fields; omit them to inherit the global 
 defaults under `[balance]` / `[targeting]`:
 
 - **`cast_chance`** `[0..1]` — chance to actually cast on each decision (a "hesitation").
-- **`cooldown`** — explicit cooldown in ticks (overrides the multiplier; floored by
-  `minCooldownTicks`). Or **`cooldown_multiplier`** to scale the spell's Iron's cooldown.
+- **`cooldown`** — explicit cooldown in **ticks** (20 = 1 s). Overrides `cooldown_multiplier`;
+  floored by `minCooldownTicks`. e.g. `"cooldown": 100` = 5 s.
+- **`cooldown_multiplier`** — scales the spell's Iron's default cooldown. **Above 1.0 = slower
+  (longer), below 1.0 = faster (shorter)** — so a *bigger* multiplier means a *longer* cooldown.
 - **`windup`** — ticks the caster spends facing/tracking the target before an attack spell
-  fires (re-checking line of sight/range; it only fires if the target is still valid).
-  `0` casts instantly.
+  fires (re-checking line of sight/range; it only fires if the target is still valid). The caster's
+  facing is snapped onto the target right before release, so even `0` (instant) fires on-aim.
+
+Spell ids: see [`../irons_spell_ids.md`](../irons_spell_ids.md) or run `/magicnpcs spells`.
 
 ```json
 {
@@ -138,3 +156,28 @@ defaults under `[balance]` / `[targeting]`:
 ```
 Here the fireball is a telegraphed, occasional heavy hit (1 s wind-up, 6 s cooldown, 60%
 chance); the magic missile omits the fields and inherits the global defaults.
+
+### Weighted starting equipment (optional)
+
+A loadout may also carry an `equipment` block to arm casters on spawn (handy with
+`equipment.requireSpellFocus`). Each hand takes a weighted item list — a bare `"id"` (weight 1) or
+`{ "item", "weight" }` — plus `chance` (default 1.0) and `only_if_empty` (default true). Omit the
+block entirely to keep the global `spawnWithGearChance` behaviour.
+
+```json
+{
+  "entity_type": "minecraft:skeleton",
+  "max_mana": 100, "mana_regen": 10,
+  "equipment": {
+    "mainhand": [
+      { "item": "irons_spellbooks:pyrium_staff",    "weight": 5 },
+      { "item": "irons_spellbooks:graybeard_staff", "weight": 1 }
+    ],
+    "chance": 0.35,
+    "only_if_empty": true
+  },
+  "spells": [
+    { "spell": "irons_spellbooks:magic_missile", "level": 1, "role": "attack", "cooldown": 100 }
+  ]
+}
+```

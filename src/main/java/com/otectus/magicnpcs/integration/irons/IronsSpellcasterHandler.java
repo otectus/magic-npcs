@@ -1,11 +1,14 @@
 package com.otectus.magicnpcs.integration.irons;
 
 import com.otectus.magicnpcs.MagicNpcs;
+import com.otectus.magicnpcs.command.LoadoutCommand;
 import com.otectus.magicnpcs.command.SchoolCommand;
+import com.otectus.magicnpcs.command.SpellListCommand;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import com.otectus.magicnpcs.core.SchoolData;
 import com.otectus.magicnpcs.core.adapter.NpcAdapter;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
+import com.otectus.magicnpcs.core.loadout.LoadoutEquipment;
 import com.otectus.magicnpcs.core.loadout.LoadoutManager;
 import com.otectus.magicnpcs.core.loadout.SpellcasterLoadout;
 import io.redspace.ironsspellbooks.api.entity.IMagicEntity;
@@ -63,6 +66,11 @@ public class IronsSpellcasterHandler {
         if (!MagicNpcsConfig.SPEC.isLoaded() || MagicNpcsConfig.SCHOOLS_COMMAND_ENABLED.get()) {
             SchoolCommand.register(event.getDispatcher());
         }
+        // Spell-id discovery is always available (read-only); Brigadier merges it under the
+        // same /magicnpcs literal as the school subcommands.
+        SpellListCommand.register(event.getDispatcher());
+        // Loadout inspection + validation (op-only, read-only) for pack authors.
+        LoadoutCommand.register(event.getDispatcher());
     }
 
     @SubscribeEvent
@@ -103,7 +111,7 @@ public class IronsSpellcasterHandler {
         maxMana.setBaseValue(desiredMaxMana(mob, loadout.maxMana()));
         manaRegen.setBaseValue(loadout.manaRegen());
         IronsBridge.initMana(mob);
-        maybeGiveSpellFocus(mob);
+        applyEquipment(mob, loadout);
 
         if (useIronsGoal(mob)) {
             mob.goalSelector.addGoal(2, IronsGoalFactory.wizardGoal(
@@ -313,6 +321,49 @@ public class IronsSpellcasterHandler {
             case HARD -> 1.2;
             default -> 1.0; // NORMAL / PEACEFUL
         };
+    }
+
+    /**
+     * Grant starting gear on spawn. When the loadout carries an explicit weighted
+     * {@code equipment} block, use it (per-hand weighted pick honouring {@code chance} +
+     * {@code only_if_empty}); otherwise fall back to the global focus-gear behaviour
+     * ({@code equipment.spawnWithGearChance} + the {@code magicnpcs:spell_focuses} tag), unchanged.
+     */
+    private static void applyEquipment(Mob mob, SpellcasterLoadout loadout) {
+        if (loadout.equipment() != null) {
+            applyWeightedEquipment(mob, loadout.equipment());
+        } else {
+            maybeGiveSpellFocus(mob);
+        }
+    }
+
+    /** Per-hand weighted equipment from a loadout's {@code equipment} block. */
+    private static void applyWeightedEquipment(Mob mob, LoadoutEquipment equipment) {
+        if (equipment.chance() <= 0.0 || mob.getRandom().nextDouble() >= equipment.chance()) {
+            return;
+        }
+        equipHand(mob, InteractionHand.MAIN_HAND, equipment.mainhand(), equipment.onlyIfEmpty());
+        equipHand(mob, InteractionHand.OFF_HAND, equipment.offhand(), equipment.onlyIfEmpty());
+    }
+
+    private static void equipHand(Mob mob, InteractionHand hand,
+                                  List<LoadoutEquipment.WeightedItem> candidates, boolean onlyIfEmpty) {
+        if (candidates == null || candidates.isEmpty()) {
+            return;
+        }
+        if (onlyIfEmpty && !mob.getItemInHand(hand).isEmpty()) {
+            return;
+        }
+        ResourceLocation itemId = LoadoutEquipment.pick(candidates, mob.getRandom());
+        if (itemId == null) {
+            return;
+        }
+        Item item = BuiltInRegistries.ITEM.getOptional(itemId).orElse(null);
+        if (item == null) {
+            MagicNpcs.LOGGER.warn("Loadout equipment references unknown item '{}' — skipping", itemId);
+            return;
+        }
+        mob.setItemInHand(hand, new ItemStack(item));
     }
 
     /** With the configured chance, equip a random spell-focus item so the held-focus requirement can be met. */

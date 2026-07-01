@@ -45,7 +45,7 @@ A school's pool is `SpellRegistry.getSpellsForSchool(school)` filtered by:
 - the global `spellBlacklist` / `spellWhitelist`.
 Up to `spellsPerSchool` are sampled (weighted by `weightingMode`). Spells in
 `supportSpellIds` (or whose name matches heal/cure/blessing/regen/haste/shield/ward/
-fortify/wisp) become SUPPORT (self-cast when hurt); the rest are ATTACK. Mana comes from
+fortify) become SUPPORT (self-cast when hurt); the rest are ATTACK. Mana comes from
 `baseMaxMana` / `baseManaRegen` (then scaled by recruit rank, `manaMultiplier`, and difficulty).
 
 ## Disabling

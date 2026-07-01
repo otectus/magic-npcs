@@ -41,11 +41,18 @@ public final class SpellcasterLoadoutProvider implements DataProvider {
         return CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
     }
 
-    /** File-name → loadout. Order is preserved for stable, reviewable output. */
-    private static Map<String, SpellcasterLoadout> loadouts() {
+    /**
+     * File-name → loadout. Order is preserved for stable, reviewable output.
+     *
+     * <p>Every shipped loadout here targets an <b>optional NPC mod's</b> entity (Recruits,
+     * Guard Villagers): inert unless that mod is installed, so the jar never changes vanilla
+     * mob behaviour without the pack author opting in. We deliberately do <b>not</b> ship a
+     * {@code minecraft:skeleton} loadout — an active vanilla-mob default would silently pool
+     * with (and override-fight) a modpack's own skeleton datapack. A documented example lives at
+     * {@code docs/loadouts/examples/skeleton.json} for authors to copy.
+     */
+    static Map<String, SpellcasterLoadout> loadouts() {
         Map<String, SpellcasterLoadout> out = new LinkedHashMap<>();
-        out.put("skeleton", new SpellcasterLoadout(mc("skeleton"), 100, 10, List.of(
-                attack(irons("magic_missile"), 1, 1, 0.0, 20.0, 1.5))));
         out.put("recruit", new SpellcasterLoadout(rec("recruit"), 80, 8, List.of(
                 attack(irons("magic_missile"), 1, 3, 0.0, 16.0, 1.0),
                 support(irons("heal"), 1, 1))));
@@ -75,7 +82,6 @@ public final class SpellcasterLoadoutProvider implements DataProvider {
     }
 
     private static ResourceLocation irons(String path) { return new ResourceLocation(IRONS, path); }
-    private static ResourceLocation mc(String path) { return new ResourceLocation("minecraft", path); }
     private static ResourceLocation rec(String path) { return new ResourceLocation("recruits", path); }
 
     @Override

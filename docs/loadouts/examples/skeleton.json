@@ -1,0 +1,18 @@
+{
+  "_comment": "EXAMPLE ONLY — not shipped in the Magic NPCs jar. Copy this into your own datapack at data/<your_namespace>/spellcasters/skeleton.json (or config/openloader/data/<pack>/data/<pack>/spellcasters/skeleton.json for OpenLoader) to make vanilla skeletons cast. The file name does not matter; the 'entity_type' field is the opt-in. Add \"replace\": true to override any other datapack's skeleton loadout instead of pooling with it.",
+  "entity_type": "minecraft:skeleton",
+  "replace": true,
+  "max_mana": 100.0,
+  "mana_regen": 10.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:magic_missile",
+      "level": 1,
+      "weight": 1,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 20.0,
+      "safety_radius": 1.5
+    }
+  ]
+}
