@@ -1,0 +1,48 @@
+{
+  "type": "forge:conditional",
+  "recipes": [
+    {
+      "conditions": [
+        {
+          "type": "forge:and",
+          "values": [
+            {
+              "type": "forge:mod_loaded",
+              "modid": "irons_spellbooks"
+            },
+            {
+              "type": "forge:item_exists",
+              "item": "irons_spellbooks:arcane_essence"
+            },
+            {
+              "type": "forge:item_exists",
+              "item": "irons_spellbooks:blank_rune"
+            }
+          ]
+        }
+      ],
+      "recipe": {
+        "type": "minecraft:crafting_shaped",
+        "key": {
+          "b": {
+            "item": "minecraft:book"
+          },
+          "e": {
+            "item": "irons_spellbooks:arcane_essence"
+          },
+          "r": {
+            "item": "irons_spellbooks:blank_rune"
+          }
+        },
+        "pattern": [
+          " e ",
+          "rbr",
+          " e "
+        ],
+        "result": {
+          "item": "magicnpcs:school_tome"
+        }
+      }
+    }
+  ]
+}

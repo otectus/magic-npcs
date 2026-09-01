@@ -53,15 +53,17 @@ public final class OwnableTeamAdapter implements NpcAdapter {
             return true;
         }
         if (caster instanceof OwnableEntity owned) {
-            LivingEntity owner = owned.getOwner();
-            if (owner != null) {
-                if (other == owner) {
-                    return true; // never harm our owner
+            // Compare owner UUIDs, not the resolved owner entity: getOwner() returns null whenever the
+            // owning player is offline or out of the loaded world, which before 0.6.0 skipped the whole
+            // sibling check — so a player's pets blasted their litter-mates the moment that player
+            // logged out (backlog B14). The UUID is stored on the entity and is always available.
+            java.util.UUID ownerId = owned.getOwnerUUID();
+            if (ownerId != null) {
+                if (ownerId.equals(other.getUUID())) {
+                    return true; // never harm our owner, online or not
                 }
-                // A sibling NPC owned by the same player.
-                if (other instanceof OwnableEntity otherOwned && otherOwned.getOwnerUUID() != null
-                        && otherOwned.getOwnerUUID().equals(owned.getOwnerUUID())) {
-                    return true;
+                if (other instanceof OwnableEntity otherOwned && ownerId.equals(otherOwned.getOwnerUUID())) {
+                    return true; // a sibling NPC owned by the same player
                 }
             }
         }

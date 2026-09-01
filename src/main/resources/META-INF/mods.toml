@@ -7,8 +7,9 @@ modId="magicnpcs"
 version="${version}"
 displayName="Magic NPCs"
 description='''
-Lets NPC mobs cast spells from Iron's Spells 'n Spellbooks. A tag-driven,
-datapack-configurable casting framework that works on any mob, with first-class
+Lets NPC mobs cast spells from Iron's Spells 'n Spellbooks. A datapack-driven
+casting framework that works on any mob — a loadout JSON is the only opt-in, no
+tags and no code — with first-class
 support for Villager Recruits. Soft-depends on Iron's Spellbooks and Recruits —
 loads cleanly if either is absent.
 '''
@@ -28,24 +29,28 @@ versionRange="[1.20.1]"
 ordering="NONE"
 side="BOTH"
 
-# Soft-dep. Compile-time pin lives in gradle.properties; this runtime range is
-# loose so 3.16+ Iron's releases within 1.20.1 are not blocked at load.
+# Soft-dep. The range is the range Magic NPCs has actually been built and checked
+# against: the mob-cast manifest in SpellManifest.java was derived from the Iron's
+# 3.16.x bytecode, and 3.15.x shares the same cast lifecycle and spell set. A future
+# 3.17 may add spells or change the lifecycle, and this build would then claim support
+# for spells it has never seen — so the range ends where the verification does rather
+# than optimistically admitting everything below 4.0.
 [[dependencies.magicnpcs]]
 modId="irons_spellbooks"
 mandatory=false
-versionRange="[1.20.1-3.15.0,1.20.1-4.0.0)"
+versionRange="[1.20.1-3.15.0,1.20.1-3.17.0)"
 ordering="AFTER"
 side="BOTH"
 
 # Soft-dep. The Recruits adapter compiles against the Recruits jar but is fully optional at runtime.
+# Narrowed from [1.0,) in 0.6.3: the adapter now reads the Recruits command system
+# (getShouldHoldPos/getHoldPos/getShouldFollow/getShouldMovePos and the formation fields) to decide
+# how far a casting recruit may reposition, where before it used only getXpLevel/getState/
+# shouldAttack. That is a much larger surface to assume of an unknown build, and the README has
+# always claimed 1.15.0+ anyway — so the range now says what was actually tested.
 [[dependencies.magicnpcs]]
 modId="recruits"
 mandatory=false
-versionRange="[1.0,)"
+versionRange="[1.15.0,)"
 ordering="AFTER"
 side="BOTH"
-
-# Mixin config. The single recruit mixin is plugin-gated to apply only when BOTH
-# Iron's Spellbooks and Recruits are present (required=false → graceful skip otherwise).
-[[mixins]]
-config="magicnpcs.mixins.json"

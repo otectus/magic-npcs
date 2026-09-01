@@ -15,15 +15,15 @@ import net.minecraftforge.gametest.PrefixGameTestTemplate;
  * <p>Running {@code runGameTestServer} <b>offline</b> (no Iron's/Recruits) already
  * verifies the most important thing: the mod <b>boots</b> in a real server — the
  * log shows {@code magicnpcs … DONE} + "Started game test server", proving
- * {@code mods.toml} is valid, the mixin config loads without crashing when its
- * targets are absent (plugin gate → skip), the config registers, and the
- * "Iron's absent → spellcasting disabled, no crash" soft-dep path holds.
+ * {@code mods.toml} is valid, the mod boots with both optional dependencies absent,
+ * the config registers, and the "Iron's absent → spellcasting disabled, no crash"
+ * soft-dep path holds.
  *
  * <p>{@link #bootSanity} runs on the shipped {@code platform} structure template
  * ({@code data/magicnpcs/structures/platform.nbt}) and passes offline.
  *
- * <p>The casting scenarios below ({@link #skeletonCastsMagicMissile}, {@link #recruitCasts},
- * {@link #recruitCastsWithIronsAi}) need the full runtime (Iron's + Curios + PlayerAnimator,
+ * <p>The casting scenarios below ({@link #skeletonCastsMagicMissile}, {@link #recruitCasts})
+ * need the full runtime (Iron's + Curios + PlayerAnimator,
  * and Recruits for the recruit cases), which is not present in the dev environment — see
  * {@code docs/dev-runtime.md}. Each is gated on {@link IronsCompat#isLoaded()} and succeeds
  * immediately (skips) when Iron's is absent, so the offline run stays green; with the full
@@ -158,6 +158,71 @@ public final class MagicNpcsGameTests {
         IronsCastingTests.stompAoeFiresForward(helper);
     }
 
+    // --- 0.6.0 behaviour changes (W1/W2/W3b) ---
+
+    /**
+     * W2: a witch casts even though its own {@code RangedAttackGoal} sits at the same priority holding
+     * the LOOK flag — and keeps that goal.
+     */
+    @GameTest(template = "platform", timeoutTicks = 300, required = false)
+    public static void witchCastsAlongsideItsRangedGoal(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.witchCastsAlongsideItsRangedGoal(helper);
+    }
+
+    /** W2/W3: a bow skeleton both shoots arrows and casts, instead of casting in place of shooting. */
+    @GameTest(template = "platform", timeoutTicks = 400, required = false)
+    public static void skeletonShootsAndCasts(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.skeletonShootsAndCasts(helper);
+    }
+
+    /** W1: a wounded caster with no target self-heals. */
+    @GameTest(template = "platform", timeoutTicks = 400, required = false)
+    public static void woundedCasterHealsOutOfCombat(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.woundedCasterHealsOutOfCombat(helper);
+    }
+
+    /** W1 anti-loop guard: a full-health caster with no target never casts. */
+    @GameTest(template = "platform", timeoutTicks = 400, required = false)
+    public static void fullHealthCasterNeverCastsOutOfCombat(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.fullHealthCasterNeverCastsOutOfCombat(helper);
+    }
+
+    /** W1 acceptance criterion: ATTACK spells are never selected without a target. */
+    @GameTest(template = "platform", timeoutTicks = 400, required = false)
+    public static void attackSpellIsNeverCastWithoutATarget(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.attackSpellIsNeverCastWithoutATarget(helper);
+    }
+
+    /** W3(b): a configured cooldown corresponds to real game ticks, not roughly double. */
+    @GameTest(template = "platform", timeoutTicks = 500, required = false)
+    public static void cooldownIsMeasuredInRealGameTicks(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.cooldownIsMeasuredInRealGameTicks(helper);
+    }
+
     /** Adapter path: a Villager Recruit casts (skips if Recruits is absent). */
     @GameTest(template = "platform", timeoutTicks = 200, required = false)
     public static void recruitCasts(GameTestHelper helper) {
@@ -168,13 +233,129 @@ public final class MagicNpcsGameTests {
         IronsCastingTests.recruitCasts(helper);
     }
 
-    /** Iron's-AI path: a recruit driven by Iron's WizardAttackGoal (via the mixin) casts. */
-    @GameTest(template = "platform", timeoutTicks = 200, required = false)
-    public static void recruitCastsWithIronsAi(GameTestHelper helper) {
+    /**
+     * The 0.6.1 report: a mob that was already loaded when the datapack arrived must become a caster.
+     *
+     * <p>Marked {@code required = true}: this is the regression the corrective release exists for, and
+     * a test that is allowed to skip is a test that cannot hold a fix in place. It still self-skips
+     * when Iron's is absent, but in a dependency-present run it must pass.
+     */
+    @GameTest(template = "platform", timeoutTicks = 100)
+    public static void existingMobBecomesCasterOnReconcile(GameTestHelper helper) {
         if (!IronsCompat.isLoaded()) {
             helper.succeed();
             return;
         }
-        IronsCastingTests.recruitCastsWithIronsAi(helper);
+        IronsCastingTests.existingMobBecomesCasterOnReconcile(helper);
+    }
+
+    /** A reload must not refill mana or clear cooldowns. */
+    @GameTest(template = "platform", timeoutTicks = 100)
+    public static void reconcilePreservesManaAndCooldowns(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.reconcilePreservesManaAndCooldowns(helper);
+    }
+
+    /** Turning the master switch off stops an already-installed goal, not just future ones. */
+    @GameTest(template = "platform", timeoutTicks = 100)
+    public static void masterSwitchBlocksInstalledGoal(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.masterSwitchBlocksInstalledGoal(helper);
+    }
+
+    /** native_attack "suppress" hands the mob's own attack goals back when it is released. */
+    @GameTest(template = "platform", timeoutTicks = 100)
+    public static void nativeAttackSuppressionIsReversible(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.nativeAttackSuppressionIsReversible(helper);
+    }
+
+    /** A pure caster backs away from a target inside its minimum range. */
+    @GameTest(template = "platform", timeoutTicks = 200)
+    public static void casterKeepsItsDistance(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.casterKeepsItsDistance(helper);
+    }
+
+    /** With native_attack=coexist the movement goal stands down — no change for existing worlds. */
+    @GameTest(template = "platform", timeoutTicks = 100)
+    public static void movementStandsDownWhenNotSuppressed(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.movementStandsDownWhenNotSuppressed(helper);
+    }
+
+    /** A caster holds position while channelling, so it does not throw away its own aim. */
+    @GameTest(template = "platform", timeoutTicks = 100)
+    public static void casterDoesNotMoveWhileChannelling(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.casterDoesNotMoveWhileChannelling(helper);
+    }
+
+    /** A tamed companion ordered to sit does not cast. */
+    @GameTest(template = "platform", timeoutTicks = 100)
+    public static void sittingPetDoesNotCast(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.sittingPetDoesNotCast(helper);
+    }
+
+    /** A spell with no verified mob-cast strategy is refused before anything is spent. */
+    @GameTest(template = "platform", timeoutTicks = 100)
+    public static void unsupportedSpellIsNotCastAndCostsNoMana(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.unsupportedSpellIsNotCastAndCostsNoMana(helper);
+    }
+
+    /** 0.6.1: an unmapped profession must not permanently disqualify a villager from ever casting. */
+    @GameTest(template = "platform", timeoutTicks = 100, required = false)
+    public static void unmappedProfessionVillagerStaysRecheckable(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.unmappedProfessionVillagerStaysRecheckable(helper);
+    }
+
+    /** 0.6.1: a hand-set school outranks an explicit loadout and survives the chunk-reload round trip. */
+    @GameTest(template = "platform", timeoutTicks = 100, required = false)
+    public static void manualSchoolSurvivesReinjection(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.manualSchoolSurvivesReinjection(helper);
+    }
+
+    /** 0.6.1: "clear" must stay cleared across a reload, not just until the chunk unloads. */
+    @GameTest(template = "platform", timeoutTicks = 100, required = false)
+    public static void manualClearStaysCleared(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.manualClearStaysCleared(helper);
     }
 }

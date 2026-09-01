@@ -3,6 +3,9 @@ package com.otectus.magicnpcs.core.loadout;
 import com.otectus.magicnpcs.core.adapter.NpcAdapter;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.animal.IronGolem;
+import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.AABB;
 
 import java.util.List;
@@ -24,7 +27,8 @@ import java.util.List;
  * @param enemiesWithin      eligible when at least this many hostiles are within {@code enemiesRadius}
  * @param enemiesRadius      radius (blocks) for the {@code enemiesWithin} count (default 8.0)
  * @param whenRecentlyHurt   eligible only if the caster took mob damage within {@code recentDamageWindow}
- * @param recentDamageWindow ticks for {@code whenRecentlyHurt} (default 60)
+ * @param recentDamageWindow ticks for {@code whenRecentlyHurt} (default 60, clamped to 100 at parse time
+ *                           because vanilla clears {@code lastHurtByMob} then)
  */
 public record CastCondition(
         Double selfHpBelow,
@@ -42,6 +46,16 @@ public record CastCondition(
         return selfHpBelow == null && targetHpBelow == null
                 && (enemiesWithin == null || enemiesWithin <= 0)
                 && (whenRecentlyHurt == null || !whenRecentlyHurt);
+    }
+
+    /**
+     * @return true if this condition constrains the caster's own condition — its health, or having been
+     *         hurt recently. Out of combat a SUPPORT spell whose condition has no such term must still
+     *         pass the {@code supportHealthThreshold} gate, or a pack could write a condition that
+     *         self-buffs forever while idle (ADR 0005).
+     */
+    public boolean hasSelfHealthGate() {
+        return selfHpBelow != null || (whenRecentlyHurt != null && whenRecentlyHurt);
     }
 
     /**
@@ -76,10 +90,46 @@ public record CastCondition(
         return true;
     }
 
-    private static int countHostiles(Mob caster, NpcAdapter adapter, double radius) {
+    /** @return how many plausible enemies of {@code caster} are within {@code radius}. */
+    public static int countHostiles(Mob caster, NpcAdapter adapter, double radius) {
         AABB box = caster.getBoundingBox().inflate(radius);
         List<LivingEntity> near = caster.level().getEntitiesOfClass(LivingEntity.class, box,
-                e -> e != caster && e.isAlive() && adapter.canCastAt(caster, e));
+                e -> e != caster && e.isAlive() && isEnemyOf(caster, e, adapter));
         return near.size();
+    }
+
+    /**
+     * Is {@code other} plausibly an <em>enemy</em> of the caster? Before 0.6.0 this was
+     * {@code adapter.canCastAt(...)}, which the default (adapter-less) mob answers {@code true} for
+     * everything — so an {@code enemies_within: 3} AoE condition fired in a pasture full of cows
+     * (backlog B8).
+     *
+     * <p>Vanilla-only heuristic, in order of confidence:
+     * <ol>
+     *   <li>the adapter must permit attacking it, and must not call it an ally;</li>
+     *   <li>it is the caster's current target, or it is currently targeting the caster — unambiguous;</li>
+     *   <li>otherwise it must be on the opposite side of the monster/non-monster line
+     *       ({@link Enemy}) <em>and</em> be something that actually fights: a player, a monster, an
+     *       iron golem, or a mob that currently has a target. Passive animals and idle villagers are
+     *       excluded.</li>
+     * </ol>
+     */
+    private static boolean isEnemyOf(Mob caster, LivingEntity other, NpcAdapter adapter) {
+        if (!adapter.canCastAt(caster, other) || adapter.isAlly(caster, other)) {
+            return false;
+        }
+        if (other == caster.getTarget()) {
+            return true;
+        }
+        if (other instanceof Mob mob && mob.getTarget() == caster) {
+            return true;
+        }
+        if (caster instanceof Enemy == other instanceof Enemy) {
+            return false; // same broad faction — not an enemy for counting purposes
+        }
+        return other instanceof Player
+                || other instanceof Enemy
+                || other instanceof IronGolem
+                || (other instanceof Mob mob && mob.getTarget() != null);
     }
 }

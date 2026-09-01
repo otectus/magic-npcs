@@ -3,6 +3,10 @@
   "item.magicnpcs.school_tome.desc": "Right-click an NPC to set its magic school; sneak to clear",
 
   "magicnpcs.configuration.enableSpellcasting": "Enable NPC spellcasting",
+  "magicnpcs.configuration.castingGoalPriority": "Casting-goal priority",
+  "magicnpcs.configuration.castingGoalUsesLookFlag": "Casting goal claims the LOOK flag",
+  "magicnpcs.configuration.disabledEntityTypes": "Disabled entity types",
+  "magicnpcs.configuration.suppressibleAttackGoals": "Extra native attack-goal classes",
   "magicnpcs.configuration.debugLogging": "Debug logging",
 
   "magicnpcs.configuration.manaMultiplier": "Mana pool multiplier",
@@ -12,13 +16,20 @@
   "magicnpcs.configuration.castChance": "Cast chance (hesitation)",
   "magicnpcs.configuration.minCooldownTicks": "Minimum cooldown floor (ticks)",
   "magicnpcs.configuration.supportHealthThreshold": "Support-cast health threshold",
+  "magicnpcs.configuration.supportOutOfCombat": "Support spells out of combat",
+  "magicnpcs.configuration.supportOutOfCombatIntervalTicks": "Out-of-combat support interval (ticks)",
   "magicnpcs.configuration.friendlyFireCheck": "Friendly-fire check",
   "magicnpcs.configuration.peacefulDisablesCasting": "Disable casting on Peaceful",
+  "magicnpcs.configuration.casterMovement": "Caster repositioning",
+  "magicnpcs.configuration.casterMovementSpeed": "Caster repositioning speed",
+  "magicnpcs.configuration.rankLevelPerRank": "Spell levels per NPC rank",
+  "magicnpcs.configuration.rankLevelMaxBonus": "Max spell levels from rank",
   "magicnpcs.configuration.difficultyScaling": "Scale mana by difficulty",
 
   "magicnpcs.configuration.requireLineOfSight": "Require line of sight",
   "magicnpcs.configuration.castWindupTicks": "Cast wind-up (ticks)",
   "magicnpcs.configuration.protectBystanders": "Protect bystanders",
+  "magicnpcs.configuration.protectBystanderPlayers": "Protect bystanding players",
   "magicnpcs.configuration.protectOwners": "Protect owners & teams",
 
   "magicnpcs.configuration.requireSpellFocus": "Require a spell focus to cast",
@@ -38,9 +49,6 @@
 
   "magicnpcs.configuration.recruits.enabled": "Enable Villager Recruits adapter",
   "magicnpcs.configuration.recruits.manaPerLevel": "Recruit mana per rank",
-  "magicnpcs.configuration.recruits.useIronsAI": "Use Iron's combat AI for recruits",
-  "magicnpcs.configuration.recruits.ironsAiSpeed": "Iron's-AI recruit speed",
-  "magicnpcs.configuration.recruits.ironsAiIntervalTicks": "Iron's-AI recruit attack interval",
 
   "magicnpcs.configuration.compat.guardvillagers": "Guard Villagers loadouts",
   "magicnpcs.configuration.compat.mca": "MCA Reborn loadouts",
@@ -57,6 +65,7 @@
   "magicnpcs.configuration.schools.spellsPerSchool": "Spells per school",
   "magicnpcs.configuration.schools.includeSupportSpells": "Include support spells",
   "magicnpcs.configuration.schools.supportSpellIds": "Support spell ids",
+  "magicnpcs.configuration.schools.allowedCastTypes": "Allowed spell cast types",
   "magicnpcs.configuration.schools.weightingMode": "Spell weighting mode",
   "magicnpcs.configuration.schools.attackMaxRange": "School attack max range",
   "magicnpcs.configuration.schools.baseMaxMana": "School base max mana",
@@ -71,6 +80,7 @@
   "magicnpcs.configuration.schools.villagers.casterChance": "Villager caster chance",
   "magicnpcs.configuration.schools.villagers.professionSchools": "Profession→school map",
   "magicnpcs.configuration.schools.villagers.unmappedGetRandom": "Unmapped professions get random",
+  "magicnpcs.configuration.schools.villagers.selfDefense": "Magic villagers fight back",
   "magicnpcs.configuration.schools.command.enabled": "Enable /magicnpcs school command",
   "magicnpcs.configuration.schools.command.permissionLevel": "Command permission level",
   "magicnpcs.configuration.schools.item.enabled": "Enable School Tome item"

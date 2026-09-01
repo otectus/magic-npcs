@@ -56,6 +56,11 @@ sourceSets.main.resources {
     exclude '.cache'
 }
 
+// The Villager Recruits jar is All Rights Reserved, so it is never committed — it has to be dropped
+// into libs/ by hand. Resolve the path once; the dependency block and the compileJava guard below
+// both key off whether it is actually there.
+def recruitsJar = file("libs/recruits-${recruits_jar_version}.jar")
+
 repositories {
     mavenCentral()
     maven {
@@ -82,7 +87,12 @@ dependencies {
 
     // Villager Recruits is a soft dependency: compile against the local jar (libs/), do NOT bundle
     // it (All Rights Reserved). flatDir + fg.deobf remaps it to the workspace mappings.
-    compileOnly fg.deobf("blank:recruits:${recruits_jar_version}")
+    // The jar is gitignored, so a fresh clone does not have it — declare the dependency only when it
+    // is actually present and let the compileJava guard below explain the situation, instead of
+    // failing with Gradle's opaque "Could not resolve blank:recruits".
+    if (recruitsJar.exists()) {
+        compileOnly fg.deobf("blank:recruits:${recruits_jar_version}")
+    }
     // Phase 7 dev-runtime (-PdevRuntime): load Iron's + its mandatory deps (GeckoLib/Curios/
     // PlayerAnimator) + Recruits at runtime so casting can actually run. runtimeOnly → never
     // shipped or committed; versions pinned to Iron's 3.15.x requirements. See docs/dev-runtime.md.
@@ -113,20 +123,104 @@ processResources {
     }
 }
 
+// Build provenance. The 0.6.1 investigation could not tell which source produced the shipped binary,
+// because the jar said nothing about itself beyond a version string that disagreed with the
+// repository. Stamp the commit, the tree state and the build time into the manifest so a log line or
+// an unzipped jar is enough to identify a build.
+def gitDescribe = { ->
+    try {
+        def out = new ByteArrayOutputStream()
+        exec {
+            commandLine 'git', 'rev-parse', '--short', 'HEAD'
+            standardOutput = out
+            errorOutput = new ByteArrayOutputStream()
+        }
+        def sha = out.toString().trim()
+        def dirty = new ByteArrayOutputStream()
+        exec {
+            commandLine 'git', 'status', '--porcelain'
+            standardOutput = dirty
+            errorOutput = new ByteArrayOutputStream()
+        }
+        return dirty.toString().trim().isEmpty() ? sha : "${sha}-dirty"
+    } catch (Exception ignored) {
+        // A source zip with no .git is a legitimate way to build; say so rather than failing.
+        return 'no-git'
+    }
+}
+
 jar {
     manifest {
         attributes([
-                "Specification-Title"   : mod_id,
-                "Specification-Vendor"  : mod_authors,
-                "Specification-Version" : "1",
-                "Implementation-Title"  : project.name,
-                "Implementation-Version": project.jar.archiveVersion,
-                "Implementation-Vendor" : mod_authors
+                "Specification-Title"    : mod_id,
+                "Specification-Vendor"   : mod_authors,
+                "Specification-Version"  : "1",
+                "Implementation-Title"   : project.name,
+                // "0.6.2+abc1234" / "0.6.2+abc1234-dirty" / "0.6.2+no-git": printed at startup and
+                // reported by /magicnpcs config.
+                "Implementation-Version" : "${project.version}+${gitDescribe()}",
+                "Implementation-Vendor"  : mod_authors,
+                "Implementation-Build-Date": new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone('UTC')),
+                "MagicNPCs-Irons-Verified": project.findProperty('irons_spellbooks_compile') ?: 'unknown'
         ])
     }
 }
 
+/**
+ * Fail the build when the version in gradle.properties, the changelog's top heading and the mod
+ * metadata disagree.
+ *
+ * The 0.6.1 release shipped as a jar whose version matched nothing in the repository, which is how a
+ * whole release line became unreconstructable. A mismatch is cheap to catch here and expensive to
+ * catch after publishing.
+ */
+tasks.register('checkVersionConsistency') {
+    group = 'verification'
+    description = 'Verify that gradle.properties, CHANGELOG.md and mods.toml agree on the version.'
+    doLast {
+        def changelog = file('CHANGELOG.md')
+        if (!changelog.exists()) {
+            throw new GradleException("CHANGELOG.md is missing; it is part of the release contract.")
+        }
+        def heading = changelog.readLines().find { it.startsWith('## ') }
+        if (heading == null || !heading.contains(mod_version)) {
+            throw new GradleException(
+                    "CHANGELOG.md's first version heading (${heading}) does not mention mod_version " +
+                    "${mod_version}. Update one of them before releasing.")
+        }
+        def toml = file('src/main/resources/META-INF/mods.toml').text
+        if (!toml.contains('version="${version}"')) {
+            throw new GradleException(
+                    "mods.toml no longer takes its version from the Gradle build; it must stay " +
+                    'version="${version}" so the two can never drift.')
+        }
+        logger.lifecycle("Version consistency OK: ${mod_version}")
+    }
+}
+
+check.dependsOn tasks.named('checkVersionConsistency')
+
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release = 17
+}
+
+// The Recruits adapter and its GameTest support compile against com.talhanation.recruits, so the jar
+// has to be present. Say that plainly at the point of failure — without this the build stops with an
+// opaque "Could not resolve blank:recruits" that says nothing about where the file goes.
+tasks.named('compileJava').configure {
+    doFirst {
+        if (!recruitsJar.exists()) {
+            throw new GradleException("""
+Missing the Villager Recruits jar, which Magic NPCs compiles against (compileOnly - it is never
+bundled, and it is All Rights Reserved so it is not committed to this repository).
+
+  Expected: ${recruitsJar}
+
+Drop that exact file into libs/ (the version is pinned by 'recruits_jar_version' in
+gradle.properties) and build again. Do NOT substitute a hand-written stub: the emitted call
+descriptors would silently disagree with the real mod at runtime.
+""".stripIndent())
+        }
+    }
 }

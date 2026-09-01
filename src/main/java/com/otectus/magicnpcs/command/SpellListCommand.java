@@ -1,6 +1,6 @@
 package com.otectus.magicnpcs.command;
 
-import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.otectus.magicnpcs.core.SpellInfo;
@@ -25,12 +25,15 @@ public final class SpellListCommand {
 
     private SpellListCommand() {}
 
-    public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
-        dispatcher.register(Commands.literal("magicnpcs")
-                .then(Commands.literal("spells")
-                        .executes(ctx -> list(ctx, ""))
-                        .then(Commands.argument("filter", StringArgumentType.greedyString())
-                                .executes(ctx -> list(ctx, StringArgumentType.getString(ctx, "filter"))))));
+    public static LiteralArgumentBuilder<CommandSourceStack> node() {
+        return Commands.literal("spells")
+                // Op-gated like every other diagnostic. README documents all of them as op-only;
+                // leaving this one open put the whole Iron's spell registry in every player's
+                // tab-completion on a multiplayer server.
+                .requires(src -> src.hasPermission(2))
+                .executes(ctx -> list(ctx, ""))
+                .then(Commands.argument("filter", StringArgumentType.greedyString())
+                        .executes(ctx -> list(ctx, StringArgumentType.getString(ctx, "filter"))));
     }
 
     private static int list(CommandContext<CommandSourceStack> ctx, String filter) {

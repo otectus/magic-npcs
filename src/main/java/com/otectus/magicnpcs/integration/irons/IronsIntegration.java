@@ -18,6 +18,9 @@ public final class IronsIntegration {
         modEventBus.addListener(IronsAttributeHandler::onAttributeModify);
         // EntityJoinLevelEvent + LivingTickEvent are FORGE-bus events.
         MinecraftForge.EVENT_BUS.register(new IronsSpellcasterHandler());
-        MagicNpcs.LOGGER.info("Iron's mob-casting integration wired (Phase 1: test skeleton casts Magic Missile).");
+        // School Tome. Must be an EntityInteract handler, not an Item callback — see
+        // SchoolTomeInteraction for why the item callback never fired on villagers or recruits.
+        MinecraftForge.EVENT_BUS.register(SchoolTomeInteraction.class);
+        MagicNpcs.LOGGER.info("Iron's mob-casting integration wired.");
     }
 }

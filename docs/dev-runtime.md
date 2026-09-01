@@ -55,13 +55,13 @@ path — fully offline:
 
 A headless gametest server launches and **loads the mod** — the boot log line
 `main … Magic NPCs … magicnpcs … 0.5.0 … DONE` (followed by "Started game test
-server") proves `mods.toml` is valid, the mixin config loads without crashing when
+server") proves `mods.toml` is valid, the mod boots with its optional dependencies absent, and
 its targets are absent (plugin gate → skip), the config registers, and the
 "Iron's absent → disabled, no crash" path holds. (This is verified.)
 
 `bootSanity` runs on the shipped `platform` structure
 (`data/magicnpcs/structures/platform.nbt`) and passes offline. The three casting
-GameTests (`skeletonCastsMagicMissile`, `recruitCasts`, `recruitCastsWithIronsAi`) are
+GameTests (`skeletonCastsMagicMissile`, `recruitCasts`) are
 gated on `IronsCompat.isLoaded()` and **succeed immediately (skip) when Iron's is absent**,
 so the offline run stays green; their real assertions — spawn the mob + a target, then
 assert mana is spent on a cast — run only in the full runtime below (and the recruit cases
@@ -77,8 +77,9 @@ fails the suite.
 3. **Recruits:** hire `recruit`/`bowman`/`crossbowman`/`captain`, set them on a hostile
    → they cast at the hostile, never at you or each other; stand an ally in the line of
    fire → that cast is skipped; level a recruit up → its mana pool grows.
-4. Set `recruits.useIronsAI=true` in `magicnpcs-server.toml` → recruits drive Iron's
-   `WizardAttackGoal` (vary spell by distance, flee at low HP); `false` → built-in goal.
+4. Give a recruit a `"native_attack": "suppress"` loadout → it stops charging into melee
+   and holds the range its spells are eligible at; order it to hold position and confirm it
+   stays put while casting.
 5. Run with the `runtimeOnly` lines removed → no crash; log reads
    "Iron's Spellbooks not detected — … disabled."
 
@@ -129,7 +130,7 @@ the casting GameTests for real (no longer skip-only). Results:
   `NpcSpellAttackGoal` path (with the 0.4.0 wind-up, telegraph, and reactive-condition code)
   spawns a caster + target and **spends mana on a real `onCast`**. `castChanceZeroNeverCasts`
   also passes. This is genuine end-to-end verification of the casting path.
-- ⚠️ `recruitCasts` / `recruitCastsWithIronsAi` (both **optional**, `required = false`) fail in
+- ⚠️ `recruitCasts` (**optional**, `required = false`) fails in
   this synthetic harness: the test only calls `setTarget`, but `RecruitsAdapter.canCastAt`
   routes through Recruits' diplomacy (`shouldAttack`), and an ownerless recruit won't attack a
   bare zombie — so it (correctly) declines. Recruit casting itself was validated manually in a
@@ -139,4 +140,4 @@ the casting GameTests for real (no longer skip-only). Results:
 
 Earlier production validation (Forge 47.4.16 dedicated server, `CHANGELOG.md` [0.1.1]) still
 stands: skeleton + recruit both cast Magic Missile with correct mana deduction, and the
-`recruits.useIronsAI=true` Mixin → `WizardAttackGoal` path casts without crashing.
+a suppressed-native recruit repositions to its standoff band and still obeys hold/follow orders.

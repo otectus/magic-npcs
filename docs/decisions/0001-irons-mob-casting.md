@@ -1,6 +1,7 @@
 # ADR 0001 — Iron's mob-casting integration model
 
 **Status:** Accepted (Phase 0 spike)
+**Superseded in part:** the cast path by [ADR 0008](0008-cast-session-and-reconciliation.md); the "implement `IMagicEntity` via Mixin onto `AbstractRecruitEntity`" proposal below by [ADR 0009](0009-caster-movement-and-rank-scaling.md), which rejects it and says why.
 **Date:** 2026-06-03
 **Verified against:** `irons-spells-n-spellbooks-855414` file `7402504` (v3.15.2, 1.20.1, parchment 2023.09.03), decompiled from the local ForgeGradle deobf cache via `javap`.
 

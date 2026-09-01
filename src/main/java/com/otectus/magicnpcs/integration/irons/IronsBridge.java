@@ -9,10 +9,8 @@ import io.redspace.ironsspellbooks.api.registry.AttributeRegistry;
 import io.redspace.ironsspellbooks.api.registry.SchoolRegistry;
 import io.redspace.ironsspellbooks.api.registry.SpellRegistry;
 import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
-import io.redspace.ironsspellbooks.api.spells.CastSource;
 import io.redspace.ironsspellbooks.api.spells.CastType;
 import io.redspace.ironsspellbooks.api.spells.SchoolType;
-import io.redspace.ironsspellbooks.capabilities.magic.TargetEntityCastData;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
@@ -20,7 +18,6 @@ import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.item.Item;
@@ -126,8 +123,10 @@ public final class IronsBridge {
 
     /**
      * Snapshot every registered Iron's spell as Iron's-free {@link SpellInfo} rows, sorted by id,
-     * for the {@code /magicnpcs spells} command and the generated reference. {@code mobFriendly} is a
-     * heuristic: an {@code INSTANT} cast is reliable for a generic mob (target-aimed, no channel).
+     * for the {@code /magicnpcs spells} command and the generated reference. {@code mobFriendly} is no
+     * longer the "is it INSTANT?" heuristic it was through 0.6.1 — it is the reviewed manifest verdict,
+     * so the command's tick marks now mean "Magic NPCs has verified a mob gets this spell's designed
+     * behaviour" rather than "it happens to resolve in one tick" (audit SPI-002).
      */
     public static List<SpellInfo> listSpells() {
         List<SpellInfo> out = new ArrayList<>();
@@ -135,16 +134,20 @@ public final class IronsBridge {
             if (spell == null || spell == SpellRegistry.none()) {
                 continue;
             }
+            ResourceLocation spellId = spell.getSpellResource();
+            if (spellId == null) {
+                continue; // an addon spell with no registry id: skip it rather than NPE the whole list
+            }
             SchoolType school = spell.getSchoolType();
             String schoolPath = school != null && school.getId() != null ? school.getId().getPath() : "";
             CastType castType = spell.getCastType();
             out.add(new SpellInfo(
-                    spell.getSpellResource().toString(),
+                    spellId.toString(),
                     schoolPath,
                     spell.getRarity(1).name(),
                     spell.getSpellCooldown(),
                     castType != null ? castType.name() : "NONE",
-                    castType == CastType.INSTANT));
+                    SpellCompat.supportOf(spell) == SpellCompat.Support.SUPPORTED));
         }
         out.sort((a, b) -> a.id().compareTo(b.id()));
         return out;
@@ -161,18 +164,21 @@ public final class IronsBridge {
         AbstractSpell spell = id == null ? null : getSpell(id);
         if (spell == null) {
             return new com.otectus.magicnpcs.core.SpellDiagnostic(rawId, false, false,
-                    "UNKNOWN", "NONE", false, false, 0);
+                    "UNKNOWN", "NONE", "UNSUPPORTED", false,
+                    "no spell with this id is registered", false, 0);
         }
-        SpellCompat.Category category = SpellCompat.categoryOf(spell);
+        SpellCompat.Support support = SpellCompat.supportOf(spell);
         CastType castType = spell.getCastType();
         return new com.otectus.magicnpcs.core.SpellDiagnostic(
                 spell.getSpellResource().toString(),
                 true,
                 spell.isEnabled(),
-                category.name(),
+                SpellCompat.categoryName(spell),
                 castType != null ? castType.name() : "NONE",
-                SpellCompat.supportedForMob(category),
-                SpellCompat.requiresTargetEntity(category),
+                support.name(),
+                SpellCompat.castableByMob(spell),
+                support == SpellCompat.Support.SUPPORTED ? null : SpellCompat.unsupportedReason(spell),
+                SpellCompat.requiresTargetEntity(spell),
                 spell.getSpellCooldown());
     }
 
@@ -180,73 +186,25 @@ public final class IronsBridge {
         return MagicData.getPlayerMagicData(caster).getMana() >= spell.getManaCost(level);
     }
 
-    /** @return Iron's cast time (ticks) for a long/channelled spell, or 0 for an instant one. */
-    public static int castTime(AbstractSpell spell, int level) {
-        return SpellCompat.isLongCast(spell) ? Math.max(0, spell.getCastTime(level)) : 0;
-    }
-
-    /** Apply a spell with no explicit target (self/forward/aimed spells). */
-    public static void cast(LivingEntity caster, AbstractSpell spell, int level) {
-        cast(caster, null, spell, level);
+    /**
+     * @return Iron's <em>effective</em> cast time (ticks) for a channelled spell on this caster, or 0
+     *         for an instant one. Effective, not raw: the raw {@code getCastTime} ignores every
+     *         caster-side cast-time modifier Iron's applies, so the mod's wind-up drifted out of step
+     *         with the channel it was pacing.
+     */
+    public static int castTime(AbstractSpell spell, int level, LivingEntity caster) {
+        return SpellCompat.effectiveCastTime(spell, level, caster);
     }
 
     /**
-     * Apply {@code spell} from {@code caster} at {@code target}, wiring up the cast data the spell
-     * needs for a non-player mob: a {@link TargetEntityCastData} for target-locked spells (root,
-     * devour, wisp), Iron's pre-cast check after that data is present, then {@code onCast} plus
-     * {@code onServerCastComplete} for long casts. Deducts the spell's mana cost on a real cast.
-     * Spells that can't be supplied their required data (multi-target / player-only) are skipped with
-     * a debug reason rather than mis-fired. {@code target} may be {@code null} for self/forward spells.
-     *
-     * @return true if the spell actually cast (so the caller can gate cooldown/swing on it)
+     * The blacklist/whitelist verdict for a <em>resolved</em> spell, which is the only form the cast
+     * path checks. Callers that filter loadout entries must use this rather than testing the raw
+     * datapack id, or a bare id like {@code magic_missile} passes their filter and is then refused at
+     * cast time — leaving the mob to replay its wind-up forever.
      */
-    public static boolean cast(LivingEntity caster, LivingEntity target, AbstractSpell spell, int level) {
-        SpellCompat.Category category = SpellCompat.categoryOf(spell);
-        if (!SpellCompat.supportedForMob(category)) {
-            if (MagicNpcsConfig.DEBUG_LOGGING.get()) {
-                MagicNpcs.LOGGER.info("[cast] skipping {} for {}: {}", spell.getSpellName(),
-                        EntityType.getKey(caster.getType()), SpellCompat.unsupportedReason(category));
-            }
-            return false;
-        }
-        MagicData data = MagicData.getPlayerMagicData(caster);
-        boolean targetData = false;
-        if (SpellCompat.requiresTargetEntity(category)) {
-            if (target == null) {
-                if (MagicNpcsConfig.DEBUG_LOGGING.get()) {
-                    MagicNpcs.LOGGER.info("[cast] skipping {} for {}: requires a target but none was supplied",
-                            spell.getSpellName(), EntityType.getKey(caster.getType()));
-                }
-                return false;
-            }
-            // Set the target BEFORE the pre-cast check — root/devour/wisp read it from there.
-            data.setAdditionalCastData(new TargetEntityCastData(target));
-            targetData = true;
-            if (!spell.checkPreCastConditions(caster.level(), level, caster, data)) {
-                data.resetAdditionalCastData();
-                if (MagicNpcsConfig.DEBUG_LOGGING.get()) {
-                    MagicNpcs.LOGGER.info("[cast] skipping {} for {}: pre-cast conditions not met",
-                            spell.getSpellName(), EntityType.getKey(caster.getType()));
-                }
-                return false;
-            }
-        }
-        float before = data.getMana();
-        spell.onCast(caster.level(), level, caster, CastSource.MOB, data);
-        // Long (channelled) spells finalize through onServerCastComplete; instant ones don't need it
-        // (and the existing instant path is proven without it, so don't change that behaviour).
-        if (SpellCompat.isLongCast(spell)) {
-            spell.onServerCastComplete(caster.level(), level, caster, data, false);
-        }
-        data.addMana(-spell.getManaCost(level));
-        if (targetData) {
-            data.resetAdditionalCastData(); // don't leak the target into the next cast
-        }
-        if (MagicNpcsConfig.DEBUG_LOGGING.get()) {
-            MagicNpcs.LOGGER.info("[cast] {} cast {} (lvl {}): mana {} -> {}",
-                    EntityType.getKey(caster.getType()), spell.getSpellName(), level, before, data.getMana());
-        }
-        return true;
+    public static boolean isAllowedSpell(AbstractSpell spell) {
+        ResourceLocation id = spell.getSpellResource();
+        return id == null || MagicNpcsConfig.isAllowed(id.toString());
     }
 
     /** Fill the mob's mana to its max (called on spawn/join). */
@@ -254,6 +212,24 @@ public final class IronsBridge {
         AttributeInstance max = caster.getAttribute(AttributeRegistry.MAX_MANA.get());
         if (max != null) {
             MagicData.getPlayerMagicData(caster).setMana((float) max.getValue());
+        }
+    }
+
+    /**
+     * Clamp a caster's current mana into {@code [0, maxMana]}.
+     *
+     * <p>Iron's {@code MagicData.setMana} only clamps inside its {@code serverPlayer != null} branch,
+     * so for a mob nothing bounds the value at either end. Lowering {@code manaMultiplier}, switching
+     * Hard→Easy, or a recruit losing rank therefore left the mob permanently above its new maximum
+     * with no path back down — {@link #tickRegen} returns early once mana is at or above max, so it
+     * never corrected itself.
+     */
+    public static void clampMana(LivingEntity caster, double maxMana) {
+        MagicData data = MagicData.getPlayerMagicData(caster);
+        float current = data.getMana();
+        float clamped = (float) Math.max(0.0, Math.min(maxMana, current));
+        if (clamped != current) {
+            data.setMana(clamped);
         }
     }
 

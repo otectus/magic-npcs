@@ -36,13 +36,14 @@ public record LoadoutEquipment(
         if (items == null || items.isEmpty()) {
             return null;
         }
-        int total = 0;
+        long total = 0L;
         for (WeightedItem w : items) {
-            total += Math.max(1, w.weight());
+            total = com.otectus.magicnpcs.core.util.Weights.saturatingAdd(
+                    total, com.otectus.magicnpcs.core.util.Weights.normalize(w.weight()));
         }
-        int roll = random.nextInt(total);
+        long roll = com.otectus.magicnpcs.core.util.Weights.roll(total, random);
         for (WeightedItem w : items) {
-            roll -= Math.max(1, w.weight());
+            roll -= com.otectus.magicnpcs.core.util.Weights.normalize(w.weight());
             if (roll < 0) {
                 return w.item();
             }

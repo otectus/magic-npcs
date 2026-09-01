@@ -29,6 +29,14 @@ public final class LoadoutJson {
     public static final String COOLDOWN_MULTIPLIER = "cooldown_multiplier";
     public static final String WINDUP = "windup";
 
+    // Per-spell held-item requirement (0.6.0, restored in 0.6.2 — audit REL-002). All optional.
+    /** {@code true} gates this spell on the caster holding one of {@link #REQUIRED_ITEMS}. */
+    public static final String REQUIRE_HELD_ITEM = "require_held_item";
+    /** Item ids and/or {@code #tag} references satisfying {@link #REQUIRE_HELD_ITEM}. */
+    public static final String REQUIRED_ITEMS = "required_items";
+    /** {@code main}, {@code off}, or {@code either} (default) — which hand must hold it. */
+    public static final String REQUIRED_HAND = "required_hand";
+
     // Per-loadout weighted starting equipment (0.5.0). All optional.
     public static final String EQUIPMENT = "equipment";
     public static final String MAINHAND = "mainhand";
@@ -42,6 +50,19 @@ public final class LoadoutJson {
     public static final String POOL_WEIGHT = "pool_weight";
     // Explicit override (0.5.0): clears lower-priority loadouts for the same entity_type+profession key.
     public static final String REPLACE = "replace";
+
+    // Loadout-level control (0.6.0). All optional; omitting one keeps 0.5.0 behaviour.
+    /** {@code false} makes the loadout inert (and, with {@code replace}, suppresses its whole group). */
+    public static final String ENABLED = "enabled";
+    /** {@code GoalSelector} priority for this loadout's casting goal; omitted = general.castingGoalPriority. */
+    public static final String GOAL_PRIORITY = "goal_priority";
+    /** {@code coexist} (default) / {@code suppress} / {@code yield} — see NativeAttackPolicy. */
+    public static final String NATIVE_ATTACK = "native_attack";
+    /**
+     * Probability [0..1] that an individual NPC of this type becomes a caster at all (0.6.0, restored
+     * in 0.6.2 — audit REL-002). Rolled <b>once</b> per NPC and persisted, so a reload never re-rolls it.
+     */
+    public static final String CASTER_CHANCE = "caster_chance";
     public static final String COND_DIMENSIONS = "dimensions";
     public static final String COND_BIOMES = "biomes";
     public static final String COND_DIFFICULTIES = "difficulties";
@@ -77,6 +98,18 @@ public final class LoadoutJson {
         }
         if (loadout.replace()) {
             o.addProperty(REPLACE, true);
+        }
+        if (!loadout.enabled()) {
+            o.addProperty(ENABLED, false);
+        }
+        if (loadout.goalPriority() != null) {
+            o.addProperty(GOAL_PRIORITY, loadout.goalPriority());
+        }
+        if (loadout.casterChance() != null) {
+            o.addProperty(CASTER_CHANCE, loadout.casterChance());
+        }
+        if (loadout.nativeAttack() != null && loadout.nativeAttack() != NativeAttackPolicy.COEXIST) {
+            o.addProperty(NATIVE_ATTACK, loadout.nativeAttack().jsonValue());
         }
         if (loadout.equipment() != null) {
             o.add(EQUIPMENT, toJson(loadout.equipment()));
@@ -187,6 +220,15 @@ public final class LoadoutJson {
         }
         if (entry.condition() != null) {
             o.add(CONDITION, toJson(entry.condition()));
+        }
+        if (entry.requireHeldItem()) {
+            o.addProperty(REQUIRE_HELD_ITEM, true);
+        }
+        if (entry.requiredItems() != null && !entry.requiredItems().isEmpty()) {
+            o.add(REQUIRED_ITEMS, stringArray(entry.requiredItems()));
+        }
+        if (entry.requiredHand() != null && entry.requiredHand() != LoadoutEntry.HandRequirement.EITHER) {
+            o.addProperty(REQUIRED_HAND, entry.requiredHand().jsonValue());
         }
         return o;
     }

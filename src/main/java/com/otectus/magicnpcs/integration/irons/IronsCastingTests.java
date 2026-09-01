@@ -4,20 +4,34 @@ import com.otectus.magicnpcs.compat.RecruitsCompat;
 import com.otectus.magicnpcs.compat.recruits.RecruitsTestSupport;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import com.otectus.magicnpcs.core.loadout.CastCondition;
+import com.otectus.magicnpcs.core.SchoolData;
+import com.otectus.magicnpcs.core.caster.CasterMovementGoal;
+import com.otectus.magicnpcs.core.caster.ManagedCasterState;
+import com.otectus.magicnpcs.core.caster.ReconcileReason;
+import com.otectus.magicnpcs.core.caster.ReconcileResult;
 import com.otectus.magicnpcs.core.loadout.LoadoutEntry;
+import com.otectus.magicnpcs.core.loadout.LoadoutManager;
+import com.otectus.magicnpcs.core.util.AttackGoals;
 import com.otectus.magicnpcs.core.loadout.SpellcasterLoadout;
 import io.redspace.ironsspellbooks.api.magic.MagicData;
 import io.redspace.ironsspellbooks.api.registry.AttributeRegistry;
-import io.redspace.ironsspellbooks.entity.mobs.goals.WizardAttackGoal;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.animal.Wolf;
+import net.minecraft.world.entity.monster.AbstractSkeleton;
 import net.minecraft.world.entity.monster.Zombie;
+import net.minecraft.world.entity.npc.Villager;
+import net.minecraft.world.entity.npc.VillagerProfession;
+import net.minecraft.world.entity.projectile.AbstractArrow;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 
 import java.util.List;
 import java.util.function.Consumer;
@@ -181,24 +195,6 @@ public final class IronsCastingTests {
         // target is an enemy; an ownerless recruit defaults otherwise. Set it aggressive so it
         // engages the hostile zombie — the diplomacy gate is exactly what the adapter enforces.
         runCastTest(helper, type, RecruitsTestSupport::makeAggressive);
-    }
-
-    /** Iron's-AI path: a recruit driven by Iron's WizardAttackGoal (via the mixin) casts. */
-    public static void recruitCastsWithIronsAi(GameTestHelper helper) {
-        EntityType<?> type = recruitType();
-        if (type == null) {
-            helper.succeed();
-            return;
-        }
-        boolean prev = MagicNpcsConfig.RECRUITS_USE_IRONS_AI.get();
-        // The goal type is chosen at spawn (applyLoadout), so set the flag before spawning;
-        // restoring it right after is safe — the WizardAttackGoal is already injected.
-        MagicNpcsConfig.RECRUITS_USE_IRONS_AI.set(true);
-        try {
-            runCastTest(helper, type, RecruitsTestSupport::makeAggressive);
-        } finally {
-            MagicNpcsConfig.RECRUITS_USE_IRONS_AI.set(prev);
-        }
     }
 
     /**
@@ -464,6 +460,227 @@ public final class IronsCastingTests {
                 .thenSucceed();
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // 0.6.0 — casting reaches the mobs it should (W2), and support works out of combat (W1)
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * W2: a {@code minecraft:witch} with a loadout must cast. The witch registers
+     * {@code RangedAttackGoal} at priority <b>2</b> declaring {@code MOVE, LOOK}; before 0.6.0 the
+     * casting goal was injected at priority 2 declaring {@code LOOK}, and
+     * {@code WrappedGoal.canBeReplacedBy} needs a <em>strictly</em> lower priority number, so it could
+     * never start while the witch had a target — exactly the reported symptom.
+     *
+     * <p>The witch's own goals are deliberately <b>left in place</b>: the fix is that a flagless casting
+     * goal coexists with them, so removing them would test nothing.
+     */
+    public static void witchCastsAlongsideItsRangedGoal(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.WITCH, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        double maxMana = primeMana(helper, caster, 300.0);
+        LoadoutEntry entry = new LoadoutEntry(
+                new ResourceLocation("irons_spellbooks", "magic_missile"),
+                1, 1, 0.0, 24.0, 1.0, LoadoutEntry.Role.ATTACK, 1.0, null, null, 0, null);
+        SpellcasterLoadout loadout = new SpellcasterLoadout(
+                EntityType.getKey(EntityType.WITCH), 300.0, 0.0, List.of(entry));
+        caster.goalSelector.addGoal(2, new NpcSpellAttackGoal(caster, loadout));
+        helper.assertTrue(hasGoal(caster, "RangedAttackGoal"),
+                "the witch must still own its native RangedAttackGoal for this test to mean anything");
+
+        Zombie target = helper.spawn(EntityType.ZOMBIE, new BlockPos(1, 2, 3));
+        target.setNoAi(true);
+        target.setNoGravity(true);
+        target.setInvulnerable(true);
+
+        helper.succeedWhen(() -> {
+            caster.setTarget(target);
+            helper.assertTrue(MagicData.getPlayerMagicData(caster).getMana() < maxMana - 0.5,
+                    "a witch with a loadout must cast even while its own RangedAttackGoal holds LOOK");
+            helper.assertTrue(hasGoal(caster, "RangedAttackGoal"),
+                    "the casting goal must coexist with the witch's ranged goal, not evict it");
+        });
+    }
+
+    /**
+     * W2/W3: a bow-armed skeleton must keep shooting <b>and</b> cast. Before 0.6.0 the casting goal
+     * (priority 2, LOOK) preempted the bow goal (priority 4, MOVE+LOOK) on every decision, so the
+     * skeleton cast <em>instead of</em> shooting — which is what "shooting magic missile so frequently
+     * that it's getting out of hand" actually was.
+     */
+    public static void skeletonShootsAndCasts(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        AbstractSkeleton caster = helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        // helper.spawn does not run finalizeSpawn, so arm the skeleton and rebuild its weapon goal.
+        caster.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(Items.BOW));
+        caster.reassessWeaponGoal();
+        double maxMana = primeMana(helper, caster, 400.0);
+        LoadoutEntry entry = new LoadoutEntry(
+                new ResourceLocation("irons_spellbooks", "magic_missile"),
+                1, 1, 0.0, 24.0, 1.0, LoadoutEntry.Role.ATTACK, 1.0, null, null, 0, null);
+        SpellcasterLoadout loadout = new SpellcasterLoadout(
+                EntityType.getKey(EntityType.SKELETON), 400.0, 0.0, List.of(entry));
+        caster.goalSelector.addGoal(2, new NpcSpellAttackGoal(caster, loadout));
+
+        Zombie target = helper.spawn(EntityType.ZOMBIE, new BlockPos(1, 2, 3));
+        target.setNoAi(true);
+        target.setNoGravity(true);
+        target.setInvulnerable(true);
+
+        helper.succeedWhen(() -> {
+            caster.setTarget(target);
+            helper.assertTrue(MagicData.getPlayerMagicData(caster).getMana() < maxMana - 0.5,
+                    "the skeleton must cast");
+            // Only count arrows this skeleton fired: sibling tests run concurrently in adjacent regions.
+            boolean shot = helper.getLevel()
+                    .getEntitiesOfClass(AbstractArrow.class, caster.getBoundingBox().inflate(16.0))
+                    .stream().anyMatch(a -> a.getOwner() == caster);
+            helper.assertTrue(shot, "the skeleton must still shoot its bow — the casting goal must not "
+                    + "preempt the bow goal every decision");
+        });
+    }
+
+    /**
+     * W1: a wounded caster with <b>no target</b> must self-heal. Before 0.6.0 {@code canUse()} returned
+     * false whenever {@code getTarget()} was null, which defeated the entire SUPPORT design — "they only
+     * use heal when entering combat".
+     */
+    public static void woundedCasterHealsOutOfCombat(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        double maxMana = primeMana(helper, caster, 300.0);
+        LoadoutEntry heal = new LoadoutEntry(
+                new ResourceLocation("irons_spellbooks", "heal"),
+                1, 1, 0.0, 0.0, 1.5, LoadoutEntry.Role.SUPPORT, 1.0, null, null, 0, null);
+        SpellcasterLoadout loadout = new SpellcasterLoadout(
+                EntityType.getKey(EntityType.HUSK), 300.0, 0.0, List.of(heal));
+        // No target selectors: the whole point is that it casts with getTarget() == null.
+        caster.goalSelector.removeAllGoals(g -> true);
+        caster.targetSelector.removeAllGoals(g -> true);
+        caster.goalSelector.addGoal(2, new NpcSpellAttackGoal(caster, loadout));
+        caster.setHealth(caster.getMaxHealth() * 0.3F); // below the default 0.5 support threshold
+
+        helper.succeedWhen(() -> {
+            caster.setTarget(null);
+            helper.assertTrue(MagicData.getPlayerMagicData(caster).getMana() < maxMana - 0.5,
+                    "a wounded caster with no target must self-heal");
+        });
+    }
+
+    /**
+     * W1, the other half: a caster at full health with no target must never cast. This is the anti-loop
+     * guard — out-of-combat support must not become a mana-burning idle animation.
+     */
+    public static void fullHealthCasterNeverCastsOutOfCombat(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        double maxMana = primeMana(helper, caster, 300.0);
+        LoadoutEntry heal = new LoadoutEntry(
+                new ResourceLocation("irons_spellbooks", "heal"),
+                1, 1, 0.0, 0.0, 1.5, LoadoutEntry.Role.SUPPORT, 1.0, null, null, 0, null);
+        SpellcasterLoadout loadout = new SpellcasterLoadout(
+                EntityType.getKey(EntityType.HUSK), 300.0, 0.0, List.of(heal));
+        caster.goalSelector.removeAllGoals(g -> true);
+        caster.targetSelector.removeAllGoals(g -> true);
+        caster.goalSelector.addGoal(2, new NpcSpellAttackGoal(caster, loadout));
+
+        helper.startSequence()
+                .thenExecuteFor(260, () -> caster.setTarget(null)) // > 2 idle cadences
+                .thenExecute(() -> helper.assertTrue(
+                        MagicData.getPlayerMagicData(caster).getMana() >= maxMana - 0.5,
+                        "a full-health caster with no target must never cast"))
+                .thenSucceed();
+    }
+
+    /**
+     * W1 acceptance criterion: an ATTACK spell must never be selected without a target. Without this
+     * the out-of-combat path would fire projectiles into empty air.
+     */
+    public static void attackSpellIsNeverCastWithoutATarget(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        double maxMana = primeMana(helper, caster, 300.0);
+        LoadoutEntry attack = new LoadoutEntry(
+                new ResourceLocation("irons_spellbooks", "magic_missile"),
+                1, 1, 0.0, 24.0, 1.0, LoadoutEntry.Role.ATTACK, 1.0, null, null, 0, null);
+        SpellcasterLoadout loadout = new SpellcasterLoadout(
+                EntityType.getKey(EntityType.HUSK), 300.0, 0.0, List.of(attack));
+        caster.goalSelector.removeAllGoals(g -> true);
+        caster.targetSelector.removeAllGoals(g -> true);
+        caster.goalSelector.addGoal(2, new NpcSpellAttackGoal(caster, loadout));
+        caster.setHealth(caster.getMaxHealth() * 0.2F); // hurt, so only the role gate can stop it
+
+        helper.startSequence()
+                .thenExecuteFor(260, () -> caster.setTarget(null))
+                .thenExecute(() -> helper.assertTrue(
+                        MagicData.getPlayerMagicData(caster).getMana() >= maxMana - 0.5,
+                        "an ATTACK spell must never be selected without a target"))
+                .thenSucceed();
+    }
+
+    /**
+     * W3(b): a configured cooldown must correspond to <b>real game ticks</b>. {@code Mob#serverAiStep}
+     * only reaches {@code canUse()} on alternating ticks, so the pre-0.6.0 decrementing counters ran at
+     * half rate and every configured value behaved as roughly double. Measures the interval between two
+     * consecutive casts against an explicit 60-tick cooldown.
+     */
+    public static void cooldownIsMeasuredInRealGameTicks(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        final int cooldown = 60;
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 600.0);
+        LoadoutEntry entry = new LoadoutEntry(
+                new ResourceLocation("irons_spellbooks", "magic_missile"),
+                1, 1, 0.0, 24.0, 1.0, LoadoutEntry.Role.ATTACK, 1.0, cooldown, null, 0, null);
+        SpellcasterLoadout loadout = new SpellcasterLoadout(
+                EntityType.getKey(EntityType.HUSK), 600.0, 0.0, List.of(entry));
+        caster.goalSelector.removeAllGoals(g -> true);
+        caster.targetSelector.removeAllGoals(g -> true);
+        caster.goalSelector.addGoal(2, new NpcSpellAttackGoal(caster, loadout));
+
+        Zombie target = helper.spawn(EntityType.ZOMBIE, new BlockPos(1, 2, 3));
+        target.setNoAi(true);
+        target.setNoGravity(true);
+        target.setInvulnerable(true);
+
+        int[] castTicks = {-1, -1};
+        float[] lastMana = {MagicData.getPlayerMagicData(caster).getMana()};
+        helper.startSequence()
+                .thenExecuteFor(400, () -> {
+                    caster.setTarget(target);
+                    float mana = MagicData.getPlayerMagicData(caster).getMana();
+                    if (mana < lastMana[0] - 0.5f) {
+                        lastMana[0] = mana;
+                        if (castTicks[0] < 0) {
+                            castTicks[0] = caster.tickCount;
+                        } else if (castTicks[1] < 0) {
+                            castTicks[1] = caster.tickCount;
+                        }
+                    }
+                })
+                .thenExecute(() -> {
+                    helper.assertTrue(castTicks[1] > 0, "expected at least two casts in 400 ticks");
+                    int delta = castTicks[1] - castTicks[0];
+                    // canUse() is only evaluated every other tick, so allow a small upward slack —
+                    // but nowhere near the ~2x of the pre-0.6.0 behaviour.
+                    helper.assertTrue(delta >= cooldown && delta <= cooldown + 12,
+                            "inter-cast interval was " + delta + " ticks; a " + cooldown
+                                    + "-tick cooldown must mean " + cooldown + " real game ticks");
+                })
+                .thenSucceed();
+    }
+
+    /** @return true if the mob owns a goal whose simple class name matches (vanilla goals are unexported). */
+    private static boolean hasGoal(Mob mob, String simpleClassName) {
+        return mob.goalSelector.getAvailableGoals().stream()
+                .anyMatch(w -> w.getGoal().getClass().getSimpleName().equals(simpleClassName));
+    }
+
     /** Set both mana attributes (no regen) and fill mana; @return the max-mana value. */
     private static double primeMana(GameTestHelper helper, Mob caster, double max) {
         AttributeInstance maxAttr = caster.getAttribute(AttributeRegistry.MAX_MANA.get());
@@ -496,7 +713,7 @@ public final class IronsCastingTests {
         // Isolate the casting goal: a melee mob's attack goal (MOVE+LOOK) would otherwise hold the
         // LOOK flag at the same priority and starve our LOOK-only cast goal. We're verifying the cast
         // pipeline + adapter, not vanilla goal scheduling, so drop the competing goals.
-        caster.goalSelector.removeAllGoals(g -> !(g instanceof NpcSpellAttackGoal) && !(g instanceof WizardAttackGoal));
+        caster.goalSelector.removeAllGoals(g -> !(g instanceof NpcSpellAttackGoal));
 
         Zombie target = helper.spawn(EntityType.ZOMBIE, new BlockPos(1, 2, 3));
         target.setNoAi(true); // a still dummy in range and line of sight
@@ -511,11 +728,384 @@ public final class IronsCastingTests {
         });
     }
 
+    /**
+     * 0.6.1: a villager whose profession maps to no school must stay <b>re-checkable</b>.
+     *
+     * <p>The spawn roll used to sticky-mark it a non-caster, which permanently disqualified 8 of the
+     * 15 vanilla professions — adding one to {@code professionSchools} afterwards could never rescue a
+     * villager that already existed. Only a lost caster-chance roll is a decided outcome.
+     */
+    public static void unmappedProfessionVillagerStaysRecheckable(GameTestHelper helper) {
+        Villager villager = helper.spawn(EntityType.VILLAGER, new BlockPos(1, 2, 1));
+        villager.setPersistenceRequired();
+        villager.setVillagerData(villager.getVillagerData().setProfession(VillagerProfession.NITWIT));
+        SchoolData.clear(villager);
+
+        // Drive the same entry point the join handler uses.
+        IronsSpellcasterHandler.rollSchoolForTest(villager);
+
+        helper.assertFalse(SchoolData.hasRolled(villager),
+                "a villager whose profession maps to no school must not be sticky-marked a non-caster — "
+                        + "that permanently bars it even after the config gains that profession");
+        helper.succeed();
+    }
+
+    /**
+     * 0.6.1: a manually assigned school must outrank an explicit loadout and survive re-injection.
+     *
+     * <p>Goals are not persisted, so a chunk reload re-runs injection. Before 0.6.1 that resolved the
+     * explicit loadout first and silently discarded the player's choice — the reason the School Tome
+     * appeared to do nothing lasting on a recruit.
+     */
+    public static void manualSchoolSurvivesReinjection(GameTestHelper helper) {
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        ResourceLocation fire = new ResourceLocation("irons_spellbooks", "fire");
+        if (!MagicNpcsConfig.allowedSchoolIds().contains(fire)) {
+            helper.succeed(); // fire is not an allowed school in this config; nothing to assert
+            return;
+        }
+        if (!IronsSpellcasterHandler.applySchool(caster, fire).ok()) {
+            helper.succeed(); // fire yields no castable pool here; covered by the pool diagnostics
+            return;
+        }
+        helper.assertTrue(SchoolData.isManual(caster), "applySchool must record the choice as manual");
+
+        // Simulate the chunk-reload path: drop the goal, then re-run injection.
+        IronsSpellcasterHandler.reinjectForTest(caster);
+        helper.assertTrue(fire.equals(SchoolData.getSchool(caster)),
+                "a hand-set school must still be the assignment after re-injection");
+        helper.assertTrue(IronsSpellcasterHandler.findSpellGoal(caster) != null,
+                "re-injection must restore a casting goal for the manually assigned school");
+        helper.succeed();
+    }
+
+    /**
+     * 0.6.1: clearing by hand must stay cleared across re-injection, including on a mob whose casting
+     * came from an explicit loadout — where the sticky mark used to be irrelevant.
+     */
+    public static void manualClearStaysCleared(GameTestHelper helper) {
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        IronsSpellcasterHandler.clearSchool(caster);
+        IronsSpellcasterHandler.reinjectForTest(caster);
+        helper.assertTrue(IronsSpellcasterHandler.findSpellGoal(caster) == null,
+                "a mob cleared by hand must not be given a casting goal again on reload");
+        helper.succeed();
+    }
+
     /** @return the Recruits "recruit" entity type, or null if Recruits is not installed. */
     private static EntityType<?> recruitType() {
         if (!RecruitsCompat.isLoaded()) {
             return null;
         }
         return BuiltInRegistries.ENTITY_TYPE.getOptional(new ResourceLocation("recruits", "recruit")).orElse(null);
+    }
+
+    // --- 0.6.2 regression tests (audit acceptance checklist) -------------------------------------
+
+    /**
+     * <b>The reported bug (audit RLD-001).</b> A mob that was already loaded when a datapack arrived
+     * must become a caster once the data is reconciled.
+     *
+     * <p>0.6.1's reload handler iterated loaded entities with {@code if (!hasSpellGoal(mob)) continue;}
+     * — a precondition that skips exactly the mobs a newly added loadout is supposed to reach. The
+     * player's skeleton had no Magic NPCs goal, so every {@code /reload} passed straight over it, and
+     * the only way to get a caster was to spawn a fresh one.
+     */
+    public static void existingMobBecomesCasterOnReconcile(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = (Mob) helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        // Reproduce "loaded before the datapack existed": strip the goal the join event installed, and
+        // forget its managed state, so the mob is indistinguishable from a plain skeleton.
+        CasterReconciler.removeSpellGoals(caster);
+        ManagedCasterState.forget(caster);
+        helper.assertTrue(IronsSpellcasterHandler.findSpellGoal(caster) == null,
+                "test setup: the skeleton should start with no casting goal");
+
+        // Publish a loadout for it, exactly as a datapack reload would, then reconcile.
+        SpellcasterLoadout loadout = testLoadout(EntityType.SKELETON, 200.0);
+        LoadoutManager.publishForTest(java.util.Map.of(EntityType.getKey(EntityType.SKELETON),
+                List.of(loadout)));
+        ReconcileResult result = CasterReconciler.reconcile(caster, ReconcileReason.DATAPACK_RELOAD);
+
+        helper.assertTrue(result.outcome() == ReconcileResult.Outcome.INSTALLED,
+                "a previously-loaded skeleton should be INSTALLED by reconciliation, got " + result.describe());
+        helper.assertTrue(IronsSpellcasterHandler.findSpellGoal(caster) != null,
+                "the skeleton should have a casting goal after reconciliation");
+        helper.succeed();
+    }
+
+    /**
+     * A reload must not refill mana or clear cooldowns (audit RCN-002).
+     *
+     * <p>0.6.1 called {@code IronsBridge.initMana} on every {@code applyLoadout} and kept cooldowns as
+     * fields on the goal it was about to replace, so editing a datapack mid-fight healed every caster
+     * to full mana and let it fire its whole rotation again immediately.
+     */
+    public static void reconcilePreservesManaAndCooldowns(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = (Mob) helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        SpellcasterLoadout loadout = testLoadout(EntityType.SKELETON, 200.0);
+        LoadoutManager.publishForTest(java.util.Map.of(EntityType.getKey(EntityType.SKELETON),
+                List.of(loadout)));
+        CasterReconciler.reconcile(caster, ReconcileReason.TEST);
+
+        // Spend some mana and put a spell on cooldown, as a real cast would.
+        MagicData data = MagicData.getPlayerMagicData(caster);
+        data.setMana(40.0f);
+        ResourceLocation spellId = new ResourceLocation("irons_spellbooks", "magic_missile");
+        ManagedCasterState state = ManagedCasterState.of(caster);
+        state.startCooldown(spellId, caster.tickCount + 200);
+
+        // Reconcile again for the same loadout: this must be a genuine no-op.
+        ReconcileResult again = CasterReconciler.reconcile(caster, ReconcileReason.DATAPACK_RELOAD);
+        helper.assertTrue(again.outcome() == ReconcileResult.Outcome.UNCHANGED,
+                "reconciling an unchanged loadout should be UNCHANGED, got " + again.describe());
+        helper.assertTrue(MagicData.getPlayerMagicData(caster).getMana() < 45.0f,
+                "reconciliation refilled mana: " + MagicData.getPlayerMagicData(caster).getMana());
+        helper.assertTrue(ManagedCasterState.of(caster).cooldownRemaining(spellId, caster.tickCount) > 0,
+                "reconciliation cleared a running cooldown");
+        helper.succeed();
+    }
+
+    /**
+     * Turning the master switch off must stop an <em>already installed</em> goal (audit CFG-001).
+     *
+     * <p>0.6.1 read {@code enableSpellcasting} when injecting a goal and in the mana tick, but the
+     * goal's own state blocker never consulted it — so a config change left every existing caster
+     * casting until its chunk reloaded.
+     */
+    public static void masterSwitchBlocksInstalledGoal(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = (Mob) helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 200.0);
+        NpcSpellAttackGoal goal = new NpcSpellAttackGoal(caster, testLoadout(EntityType.SKELETON, 200.0));
+        caster.goalSelector.addGoal(2, goal);
+
+        boolean previous = MagicNpcsConfig.ENABLE_SPELLCASTING.get();
+        try {
+            MagicNpcsConfig.ENABLE_SPELLCASTING.set(false);
+            helper.assertTrue(goal.stateBlocker() != null,
+                    "with enableSpellcasting=false the installed goal must report a blocker");
+            helper.assertFalse(goal.canUse(), "a disabled caster must not decide to cast");
+            MagicNpcsConfig.ENABLE_SPELLCASTING.set(true);
+            helper.assertTrue(goal.stateBlocker() == null,
+                    "re-enabling spellcasting must clear the blocker");
+        } finally {
+            MagicNpcsConfig.ENABLE_SPELLCASTING.set(previous);
+        }
+        helper.succeed();
+    }
+
+    /**
+     * {@code native_attack: "suppress"} must be reversible (audit RCN-003).
+     *
+     * <p>0.6.1 removed the mob's own attack goals outright. Nothing recorded how to rebuild them, so
+     * changing the policy back to {@code coexist}, removing the loadout, or disabling the mod left the
+     * mob permanently unable to use its bow.
+     */
+    public static void nativeAttackSuppressionIsReversible(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = (Mob) helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        caster.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(Items.BOW));
+        ((AbstractSkeleton) caster).reassessWeaponGoal();
+        int before = countNativeAttackGoals(caster);
+        helper.assertTrue(before > 0, "test setup: a bow skeleton should have a native attack goal");
+
+        List<String> suppressed = AttackGoals.suppressNativeAttackGoals(caster);
+        helper.assertTrue(!suppressed.isEmpty(), "suppression should have taken over a goal");
+        helper.assertTrue(countNativeAttackGoals(caster) == 0,
+                "no native attack goal should be runnable while suppressed");
+        helper.assertTrue(AttackGoals.hasSuppressedGoals(caster), "the lease should be visible");
+
+        AttackGoals.releaseNativeAttackGoals(caster);
+        helper.assertTrue(countNativeAttackGoals(caster) == before,
+                "releasing the lease must restore every original goal (had " + before
+                        + ", now " + countNativeAttackGoals(caster) + ")");
+        helper.assertFalse(AttackGoals.hasSuppressedGoals(caster), "no lease should remain");
+        helper.succeed();
+    }
+
+    /** @return how many of the mob's own attack goals are present and not held inert. */
+    private static int countNativeAttackGoals(Mob mob) {
+        int n = 0;
+        for (net.minecraft.world.entity.ai.goal.WrappedGoal wrapped : mob.goalSelector.getAvailableGoals()) {
+            if (AttackGoals.isNativeAttackGoal(wrapped.getGoal())) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * A tamed companion ordered to sit does not cast (audit TGT-003).
+     *
+     * <p>Present in 0.6.0 and gone from 0.6.1, which left "sit" — the one instruction a player has for
+     * switching a companion off — not switching anything off.
+     */
+    public static void sittingPetDoesNotCast(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Wolf wolf = helper.spawn(EntityType.WOLF, new BlockPos(1, 2, 1));
+        wolf.setPersistenceRequired();
+        wolf.setTame(true);
+        primeMana(helper, wolf, 200.0);
+        NpcSpellAttackGoal goal = new NpcSpellAttackGoal(wolf, testLoadout(EntityType.WOLF, 200.0));
+
+        wolf.setOrderedToSit(false);
+        helper.assertTrue(goal.stateBlocker() == null,
+                "a standing tamed wolf should have no state blocker, got: " + goal.stateBlocker());
+        wolf.setOrderedToSit(true);
+        helper.assertTrue(goal.stateBlocker() != null,
+                "a sitting tamed wolf must not be allowed to cast");
+        wolf.setOrderedToSit(false);
+        helper.succeed();
+    }
+
+    /**
+     * A spell outside the verified manifest is not cast and costs nothing (audit SPI-002).
+     *
+     * <p>0.6.1 classified four spell paths explicitly and defaulted everything else to "supported", so
+     * a player-only or channel-driven spell could be selected, spend mana, start a cooldown, and do
+     * nothing at all. Unverified and unsupported spells now fail closed, before the transaction point.
+     */
+    public static void unsupportedSpellIsNotCastAndCostsNoMana(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = (Mob) helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        double maxMana = primeMana(helper, caster, 200.0);
+
+        // recall is player-only: Iron's checkPreCastConditions refuses any non-ServerPlayer caster.
+        var recall = IronsBridge.getSpell(new ResourceLocation("irons_spellbooks", "recall"));
+        if (recall == null) {
+            helper.succeed(); // this Iron's build does not have it; nothing to assert
+            return;
+        }
+        helper.assertFalse(SpellCompat.castableByMob(recall),
+                "recall must be reported as not castable by a mob");
+        MobCastSession.Start start = MobCastSession.begin(caster, null, recall, 1);
+        helper.assertFalse(start.started(), "a player-only spell must not start a cast session");
+        helper.assertTrue(MagicData.getPlayerMagicData(caster).getMana() >= maxMana - 0.5,
+                "a refused cast must not spend mana");
+        helper.succeed();
+    }
+
+    /** A minimal single-spell attack loadout, shared by the 0.6.2 regression tests. */
+    private static SpellcasterLoadout testLoadout(EntityType<?> type, double maxMana) {
+        LoadoutEntry entry = new LoadoutEntry(
+                new ResourceLocation("irons_spellbooks", "magic_missile"),
+                1, 1, 0.0, 24.0, 0.0, LoadoutEntry.Role.ATTACK, 1.0, null, null, 0, null);
+        return new SpellcasterLoadout(EntityType.getKey(type), maxMana, 0.0, List.of(entry));
+    }
+
+    // --- 0.6.3: caster movement and rank scaling -------------------------------------------------
+
+    /**
+     * A pure caster backs away from a target that is inside its minimum range.
+     *
+     * <p>A plain Villager Recruit has only a `RecruitMeleeAttackGoal`, so a casting one closed to
+     * sword range and cast on the way in. A skeleton stands in for it here: same shape (native attack
+     * AI suppressed, nothing telling it where to stand), and it needs no optional dependency.
+     */
+    public static void casterKeepsItsDistance(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = (Mob) helper.spawn(EntityType.SKELETON, new BlockPos(3, 2, 3));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 400.0);
+
+        SpellcasterLoadout loadout = standoffLoadout(EntityType.SKELETON);
+        LoadoutManager.publishForTest(java.util.Map.of(EntityType.getKey(EntityType.SKELETON),
+                List.of(loadout)));
+        CasterReconciler.reconcile(caster, ReconcileReason.TEST);
+        ManagedCasterState state = ManagedCasterState.of(caster);
+        helper.assertTrue(state.nativeAttackSuppressed(),
+                "test setup: native_attack=suppress should have taken over the skeleton's bow goal");
+
+        Zombie target = helper.spawn(EntityType.ZOMBIE, new BlockPos(3, 2, 4));
+        target.setNoAi(true);
+        double startDistance = caster.distanceTo(target);
+        helper.assertTrue(startDistance < 4.0,
+                "test setup: the caster should start well inside its minimum range");
+
+        helper.succeedWhen(() -> {
+            caster.setTarget(target);
+            helper.assertTrue(caster.distanceTo(target) > startDistance + 1.5,
+                    "a pure caster with min_range 8 should back away from a target 1 block in front "
+                            + "of it, but it is still at " + caster.distanceTo(target));
+        });
+    }
+
+    /**
+     * The movement goal stands down when the mob still has its own attack AI.
+     *
+     * <p>This is the "no behaviour change for existing worlds" guarantee: the shipped recruit loadouts
+     * use the default `coexist`, so nothing about how they fight changes. It is also what keeps the
+     * goal out of a tug-of-war with a melee goal that is pathing inward.
+     */
+    public static void movementStandsDownWhenNotSuppressed(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = (Mob) helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 200.0);
+        // A coexist loadout: the mob keeps its own attack goals.
+        LoadoutManager.publishForTest(java.util.Map.of(EntityType.getKey(EntityType.SKELETON),
+                List.of(testLoadout(EntityType.SKELETON, 200.0))));
+        CasterReconciler.reconcile(caster, ReconcileReason.TEST);
+
+        Zombie target = helper.spawn(EntityType.ZOMBIE, new BlockPos(1, 2, 2));
+        target.setNoAi(true);
+        caster.setTarget(target);
+
+        CasterMovementGoal movement = new CasterMovementGoal(caster,
+                testLoadout(EntityType.SKELETON, 200.0).spells(), 1.0);
+        helper.assertFalse(movement.canUse(),
+                "with native_attack=coexist the movement goal must not engage");
+        helper.succeed();
+    }
+
+    /**
+     * A caster holds position while a channelled spell is in flight.
+     *
+     * <p>The casting session re-aims at its target every tick of a channel; walking at the same time
+     * throws that aim away, and a spell that reads the caster's look angle would spray.
+     */
+    public static void casterDoesNotMoveWhileChannelling(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = (Mob) helper.spawn(EntityType.SKELETON, new BlockPos(3, 2, 3));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 400.0);
+        SpellcasterLoadout loadout = standoffLoadout(EntityType.SKELETON);
+        LoadoutManager.publishForTest(java.util.Map.of(EntityType.getKey(EntityType.SKELETON),
+                List.of(loadout)));
+        CasterReconciler.reconcile(caster, ReconcileReason.TEST);
+
+        Zombie target = helper.spawn(EntityType.ZOMBIE, new BlockPos(3, 2, 4));
+        target.setNoAi(true);
+        caster.setTarget(target);
+
+        // Assert the gate directly rather than racing a real channel: with channelling set, the goal
+        // must stop the navigation even though the target is well inside the standoff band.
+        ManagedCasterState.of(caster).setChannelling(true);
+        CasterMovementGoal movement = new CasterMovementGoal(caster, loadout.spells(), 1.0);
+        movement.tick();
+        helper.assertFalse(caster.getNavigation().isInProgress(),
+                "a channelling caster must not be pathing anywhere");
+        ManagedCasterState.of(caster).setChannelling(false);
+        helper.succeed();
+    }
+
+    /** A minimal pure-caster loadout: native attack suppressed, and a real standoff band. */
+    private static SpellcasterLoadout standoffLoadout(EntityType<?> type) {
+        LoadoutEntry entry = new LoadoutEntry(
+                new ResourceLocation("irons_spellbooks", "magic_missile"),
+                1, 1, 8.0, 24.0, 0.0, LoadoutEntry.Role.ATTACK, 1.0, null, null, 0, null);
+        return new SpellcasterLoadout(EntityType.getKey(type), null, 400.0, 0.0, List.of(entry),
+                null, null, 1, new ResourceLocation("magicnpcs", "gametest_standoff"), false, true,
+                com.otectus.magicnpcs.core.loadout.LoadoutSourceTier.DATAPACK, null,
+                com.otectus.magicnpcs.core.loadout.NativeAttackPolicy.SUPPRESS, null);
     }
 }

@@ -11,24 +11,89 @@ are documented from public sources and **must be verified for your exact version
    or the mod's docs).
 2. Drop the JSON into a datapack at `data/<your_pack>/spellcasters/<name>.json`
    (any namespace works — `entity_type` is what matters).
-3. Enable the matching compat toggle in `config/magicnpcs-server.toml` → `[compat]`
+3. Enable the matching compat toggle in `config/magicnpcs-common.toml` → `[compat]`
    (e.g. `guardvillagers = true`). Loadouts for these namespaces are **inert until
-   their toggle is enabled** — a deliberate, modpack-safe default.
+   their toggle is enabled** — a deliberate, modpack-safe default. (Before 0.6.0 these lived in the
+   per-world `magicnpcs-server.toml`; that copy is still read for one release.) Magic NPCs logs a
+   warning at load time if the owning mod is installed while its toggle is off.
 4. `/reload`.
 
-## Vanilla mobs (e.g. skeletons) and OpenLoader
+## Vanilla mobs (e.g. skeletons, witches) and OpenLoader
 
 Magic NPCs ships **no** active loadout for vanilla mobs, so vanilla skeletons cast nothing until a
-datapack opts them in. Copy [`examples/skeleton.json`](examples/skeleton.json) into a datapack at
-`data/<your_pack>/spellcasters/skeleton.json`, or for an **OpenLoader** pack at
-`config/openloader/data/<pack>/data/<pack>/spellcasters/skeleton.json`. Vanilla mobs need no compat
+datapack opts them in. Copy [`examples/skeleton.json`](examples/skeleton.json) or
+[`examples/witch.json`](examples/witch.json) into a datapack at
+`data/<your_pack>/spellcasters/<name>.json`, or for an **OpenLoader** pack at
+`config/openloader/data/<pack>/data/<pack>/spellcasters/<name>.json`. Vanilla mobs need no compat
 toggle.
 
-If another datapack (or an older Magic NPCs build) also defines that entity type, the loadouts
-**pool** by default (each mob picks one). Add a root-level `"replace": true` to make yours override
-the others for that `entity_type` (+ optional `profession`) instead of stacking. Use
-`/magicnpcs validate` to spot pooled/duplicate keys and `/magicnpcs loadout entity <target>` to see
-what a given mob actually resolves to.
+**Your file beats the mod's (0.6.0).** A loadout loaded from a datapack automatically outranks one
+shipped inside a mod jar for the same `entity_type` (+ optional `profession`) — you do **not** need
+`"replace": true` to beat the bundled `guardvillagers:guard` loadout any more. `replace` still
+arbitrates between *two datapacks*: if another pack also defines your entity type, the loadouts
+**pool** by default (each mob sticky-picks one), and a root-level `"replace": true` makes yours win.
+`/magicnpcs validate` lists **every discovered loadout file** with its status — active, shadowed,
+suppressed or rejected — so a file that failed to load is visible instead of vanishing into the log.
+`/magicnpcs loadout entity <targets>` shows what a given mob resolves to, which pack it came from, and
+whether that is actually what its goal is running. `/magicnpcs why <targets>` explains why a mob is or
+isn't casting right now.
+
+**After editing a file, run `/reload`.** Every loaded mob is then re-evaluated, including mobs that
+were not casters before — so a skeleton that was standing there when you added the pack becomes a
+caster without needing to be respawned. (Through 0.6.1 the reload only rebuilt mobs that were
+*already* casters, which is why adding a datapack appeared to do nothing.) `/magicnpcs reconcile` does
+the same thing on demand.
+
+## Turning a mob's casting off
+
+Four ways, in increasing order of bluntness:
+
+1. **One JSON file**, no jar edits, survives `/reload`. A disabled loadout with `"replace": true`
+   suppresses every loadout for that key — including the mod's own:
+   ```json
+   { "entity_type": "minecraft:skeleton", "enabled": false, "replace": true }
+   ```
+   (A disabled loadout may omit `spells` entirely.)
+
+   A **bare stub** also works when your file sits at the same data path as the loadout you are
+   switching off — the entity type is inherited from the file being shadowed:
+   ```json
+   { "enabled": false }
+   ```
+   `/magicnpcs validate` records the inference, so you can confirm it caught the right key. If the
+   stub has nothing to shadow it is rejected with that explanation, rather than silently doing
+   nothing.
+2. **A shipped loadout only** — set its switch to `false` under `[builtinLoadouts]` in
+   `magicnpcs-server.toml`. Exactly equivalent to option 1, without writing a datapack.
+3. **One config line** — add the id to `general.disabledEntityTypes` in `magicnpcs-server.toml`.
+4. **The whole feature** — `general.enableSpellcasting = false`. This takes effect immediately on
+   already-spawned casters.
+
+## Mobs with their own ranged attack AI
+
+Since 0.6.0 the casting goal declares no control flags, so it runs *alongside* a mob's built-in attack
+AI instead of fighting it for the LOOK lock. A witch throws potions **and** casts; a bow skeleton
+shoots **and** casts. If you want different behaviour, set `"native_attack"` on the loadout:
+
+| Value | Effect |
+|---|---|
+| `"coexist"` (default) | Cast alongside the mob's own attack goals. |
+| `"suppress"` | Hold the mob's native ranged/melee attack goals inert — a "pure caster" conversion. **Reversible**: the original goals are wrapped rather than destroyed, and are handed back intact when the loadout changes, is removed, or the mod is disabled. Every goal taken over is logged by class name. Note that some mobs (e.g. skeletons on weapon change) re-add theirs. |
+| `"yield"` | Only cast while none of the mob's own attack goals is running. |
+
+**`"suppress"` also switches on caster movement (0.6.3).** A mob whose own attack AI is held inert
+has nothing left telling it where to stand, so Magic NPCs keeps it in the band between the widest
+`min_range` and the narrowest `max_range` of its own ATTACK spells: it backs off when a target closes
+inside that band and advances when one drifts out of it. Where the mob's mod has a command system,
+that is respected — a Villager Recruit holding a position gets a short leash around it, one following
+its owner a longer one, and one in a formation or marching to a position does not move at all. A
+loadout on the default `"coexist"` keeps its own attack AI and does not reposition.
+
+`"goal_priority"` overrides `general.castingGoalPriority` for one entity type. If a mob still never
+casts, run `/magicnpcs why <target>`: it dumps every goal as `priority | class | flags | running` and
+names the one that is blocking, which is the answer for mods this document can't anticipate. Mobs that
+do not use the vanilla goal system at all (some animation- or Brain-driven modded mobs) cannot be
+reached by goal injection — `why` will show an empty or unrelated goal list, which is the tell.
 
 ## Known limitations
 
@@ -46,9 +111,15 @@ what a given mob actually resolves to.
 
 ## Examples
 
+### Vanilla witch — `minecraft:witch`
+See [`examples/witch.json`](examples/witch.json). Needs no compat toggle. The witch keeps its own
+potion-throwing AI and casts alongside it.
+
 ### Guard Villagers — `guardvillagers:guard`
-(Already shipped as an active, toggle-gated default in
-`data/magicnpcs/spellcasters/guard.json`.)
+The jar ships a toggle-gated default at `data/magicnpcs/spellcasters/guard.json` (magic missile,
+guiding bolt, heal). Since 0.6.0 **your own guard JSON simply replaces it** — a datapack outranks jar
+data, so you no longer get a mix of your spells and the mod's across different guards. Confirm with
+`/magicnpcs loadout entity <guard>`, which prints the winning source and its pack.
 
 ### Human Companions — `humancompanions:human_companion`
 ```json
@@ -120,9 +191,10 @@ toggle is needed — this is vanilla.
   ]
 }
 ```
-Villagers only cast when they have a target (raids, or a guard mod grants combat AI), so a
-cleric battlemage stays peaceful until a raid hits. For modded professions, use that mod's
-profession id (e.g. `morevillagers:fisherman`).
+Villagers only cast offensively when something gives them a target — a guard mod's combat AI, or the
+opt-in `schools.villagers.selfDefense`. A raid will **not** do it: vanilla never targets for a
+villager. So a cleric battlemage stays peaceful unless you arrange one of those. For modded
+professions, use that mod's profession id (e.g. `morevillagers:fisherman`).
 
 ### Per-spell pacing & aim (optional)
 

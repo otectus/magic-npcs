@@ -11,12 +11,23 @@ Recruits and loads cleanly if either is absent.
 
 - A mob becomes a spellcaster when a **datapack loadout** exists for its entity
   type (`data/<namespace>/spellcasters/<name>.json`). No tags, no code.
-- On spawn, the mob gets Iron's mana attributes (`MAX_MANA` / `MANA_REGEN`); a
-  lightweight AI goal then selects and casts spells at its target via Iron's real
-  `AbstractSpell.onCast(..., CastSource.MOB, ...)`. Iron's spawns the spell's own
+- On spawn — and on every reload, config change or manual assignment — the mob is
+  **reconciled**: Magic NPCs works out what it should be running, compares that with what
+  it is running, and applies only the difference. A mob already running the right loadout
+  is left completely alone, which is what lets a `/reload` preserve mana and cooldowns.
+- A reconciled caster gets Iron's mana attributes (`MAX_MANA` / `MANA_REGEN`) and an AI
+  goal that selects spells. Casting runs Iron's **real cast lifecycle** — `initiateCast`,
+  `onServerPreCast`, per-tick `onServerCastTick`, `onCast`, `onServerCastComplete` — in the
+  same order Iron's own casting mobs use, so channelled and continuous spells behave as
+  designed rather than being reduced to a single call. Iron's spawns the spell's own
   particles and sounds server-side.
 - Mana and cooldowns are owned by Magic NPCs (Iron's does not run its player-side
-  economy for foreign mobs); mana regenerates each tick from `MANA_REGEN`.
+  economy for foreign mobs); mana regenerates each tick from `MANA_REGEN`. Both are charged
+  once, at the moment Iron's accepts a cast — a spell that is refused costs nothing.
+- Spells are cast only when Magic NPCs has **verified** that a mob gets their designed
+  behaviour. The check is a reviewed per-spell manifest derived from the Iron's jar this
+  build was tested against; anything outside it is *unverified* and skipped unless you opt
+  in with `spells.allowUnverifiedSpells`.
 
 ### Villager Recruits (optional)
 
@@ -29,25 +40,36 @@ When Recruits is installed, a thin adapter:
 
 Ships curated combat loadouts for `recruit`, `bowman`, `crossbowman`, and `captain`.
 
-Optionally (config `recruits.useIronsAI`, default off), recruits use Iron's *own*
-combat AI (`WizardAttackGoal`: distance-aware selection, fleeing) via a Mixin that
-makes them `IMagicEntity`; the actual cast still routes through the proven path above.
-In this mode selection/fleeing are Iron's, so the built-in **line-of-sight, friendly-fire,
-Peaceful, and spell-focus gates do not apply** (the cast still goes through Magic NPCs'
-mana economy). Leave it off if you rely on those safety gates.
+Recruits **rank up into stronger casters**: a recruit's XP level raises its mana pool, and since
+0.6.3 also the level its spells are cast at — the loadout's `level` is a floor, capped by
+`balance.rankLevelMaxBonus` and the spell's own maximum.
+
+`recruits.useIronsAI` was **removed in 0.6.3** (it had already been inert since 0.6.2), along with
+`ironsAiSpeed` and `ironsAiIntervalTicks`, which never had any readers at all. It replaced the
+built-in goal with Iron's `WizardAttackGoal` and handed it a bare list of spells, discarding every
+per-entry setting in your loadout — level, weight, ranges, safety radius, cast chance, cooldown,
+wind-up, reactive conditions — so one config toggle silently changed what a datapack *meant*. See
+[ADR 0009](docs/decisions/0009-caster-movement-and-rank-scaling.md) for why it is not coming back,
+and what replaced it.
 
 ## Dependencies
 
 | Mod | Required? | Version (1.20.1) |
 |-----|-----------|------------------|
 | Forge | yes | **47.4.0+** (required by Iron's 3.15.x) |
-| Iron's Spells 'n Spellbooks | for any casting | `1.20.1-3.15.x` |
+| Iron's Spells 'n Spellbooks | for any casting | `1.20.1-3.15.x` – `1.20.1-3.16.x` |
 | GeckoLib | (Iron's dep) | `4.8+` |
 | Curios API | (Iron's dep) | `5.4.7+` |
 | PlayerAnimator | (Iron's dep) | `1.0.2-rc1+` |
 | Villager Recruits | optional | `1.15.0+` (enables the recruit adapter) |
 
 Magic NPCs **does not bundle** Iron's or Recruits — install them yourself.
+
+The Iron's range in `mods.toml` is `[1.20.1-3.15.0, 1.20.1-3.17.0)`: it ends where the
+verification ends. The mob-cast manifest was derived from the 1.20.1-3.16.3 bytecode, and a
+later Iron's may add spells or change the cast lifecycle — at which point this build would be
+claiming verified support for code it has never seen. The startup log names the Iron's version
+it found and the range it was checked against.
 
 ## Datapacks: make any mob a spellcaster
 
@@ -95,6 +117,9 @@ loadout's **`entity_type`** is what matters — not the file name or namespace.
 |-------|---------|---------|
 | `entity_type` | — | target entity id (the opt-in) |
 | `profession` | *(none)* | optional villager profession id — scopes the loadout to one profession (see below) |
+| `enabled` | `true` | `false` makes the loadout inert; with `"replace": true` it switches the whole entity type off (see [Turning casting off](#12-turning-a-mobs-casting-off)). A disabled loadout may omit `spells` |
+| `native_attack` | `coexist` | how the casting goal coexists with the mob's own attack AI: `coexist` / `suppress` / `yield` (see [Mobs with native ranged AI](#13-mobs-with-their-own-ranged-attack-ai)) |
+| `goal_priority` | *(global `castingGoalPriority`)* | `GoalSelector` priority for this loadout's casting goal |
 | `max_mana` / `mana_regen` | 100 / 10 | base values for the mob's Iron's mana attributes |
 | `spell` | — | an Iron's spell registry id |
 | `level` | 1 | spell level to cast at |
@@ -113,7 +138,10 @@ omit them to inherit the matching global config default. `condition` is also opt
 
 #### Cooldowns, precisely (how to make a spell fire more/less often)
 
-There are two ways to set a spell's cooldown. **20 ticks = 1 second.**
+There are two ways to set a spell's cooldown. **20 ticks = 1 second, and since 0.6.0 that is
+literally true** — before 0.6.0 the cooldown counter only advanced on alternating game ticks, so every
+configured value behaved as roughly double. If you tuned a pack against an older build, set
+`balance.cooldownMultiplier = 2.0` to get the old rate back.
 
 - **`cooldown`** — an **exact** cooldown in **ticks**. This is the clearest option and what we
   recommend for modpack authors. `"cooldown": 100` = a 5-second cooldown, full stop.
@@ -156,14 +184,24 @@ NPCs auto-retries bare ids under `irons_spellbooks:`, and logs a clear warning f
 resolve — but write the full id. Frequently-confused examples: `irons_spellbooks:blight` is correct
 as-is; `devour` → `irons_spellbooks:devour`; `fangward` → `irons_spellbooks:fang_ward`.
 
-#### Four different "chance" knobs (don't mix them up)
+#### Five different "chance" knobs (don't mix them up)
 
 | Knob | Controls |
 |------|----------|
 | `weight` (per spell) | **which** spell is picked among the currently-eligible ones |
 | `cast_chance` (per spell) | **whether** the NPC actually casts after that spell is picked (a hesitation) |
+| `caster_chance` (per loadout) | **whether this individual NPC is a caster at all**, rolled once and remembered |
 | `equipment.chance` / `equipment.spawnWithGearChance` | **whether a mob gets casting gear** on spawn |
 | `schools.*.casterChance` | **whether a generated school-caster exists** at all |
+
+`caster_chance` is the one to reach for when you want *some* skeletons to be mages rather than all of
+them. The roll happens once per NPC and is stored on it, so a `/reload` or a chunk reload can never
+flip an individual into or out of being a caster:
+
+```json
+{ "entity_type": "minecraft:skeleton", "caster_chance": 0.15, "max_mana": 100, "mana_regen": 10,
+  "spells": [ { "spell": "irons_spellbooks:magic_missile", "role": "attack" } ] }
+```
 
 ### 3. A worked example (annotated)
 
@@ -190,13 +228,23 @@ A multi-spell "battlemage" mixing a ranged nuke, a spammable bolt, and self-heal
   is ≥6 blocks away (don't nuke point-blank); `magic_missile` fires from 0–16.
 - **`safety_radius`** is friendly-fire clearance — large (4) for the AoE `fireball`, small (1)
   for the single-target missile. A cast is **skipped** if an ally/bystander sits inside it.
-- **`role: support`** spells self-cast only when the caster drops below
-  `balance.supportHealthThreshold` (default 50% HP), and ignore range.
+- **`require_held_item`** (with optional `required_items` and `required_hand`) gates *one* spell on
+  what the caster is holding, so a mob can have a staff-only nuke alongside spells it casts
+  bare-handed. `required_items` takes item ids and `#namespace:tag` references; omit it to fall back to
+  the `#magicnpcs:spell_focuses` tag. `required_hand` is `main`, `off`, or `either` (the default).
+  This is separate from `equipment.requireSpellFocus`, which gates *all* casting.
+- **`role: support`** spells self-cast when the caster drops below
+  `balance.supportHealthThreshold` (default 50% HP), and ignore range. Since 0.6.0 this works **out of
+  combat too**: a wounded NPC with no target heals itself on the slower
+  `balance.supportOutOfCombatIntervalTicks` cadence (default 100 ticks). It never casts at full health,
+  and `attack` spells are never selected without a target. Set `balance.supportOutOfCombat = false`
+  for the pre-0.6.0 "only heals once something attacks it" behaviour.
 
 ### 4. Targeting a modded mob
 
-`entity_type` accepts any registered entity id. JSON has no comments, but Magic NPCs
-ignores unknown keys, so a `__comment` is a handy in-file note:
+`entity_type` accepts any registered entity id, and is checked against the registry — an unregistered
+id is reported by name rather than producing a loadout nothing can ever match. JSON has no comments,
+but `_comment`, `__comment` and `$comment` are explicitly allowed anywhere as in-file notes:
 
 ```json
 {
@@ -229,8 +277,10 @@ as the fallback.
 }
 ```
 
-> Vanilla villagers only actually cast when they have a target (raids, or a guard/NPC mod
-> grants combat AI) — their peaceful behaviour is preserved.
+> Vanilla villagers have **no targeting AI at all** — nothing in vanilla, raids included, ever gives
+> one a target — so a villager only casts offensively if a guard/NPC mod grants it combat AI, or you
+> turn on `schools.villagers.selfDefense`. Without either it can still self-cast support spells when
+> wounded. Its peaceful behaviour is otherwise preserved.
 
 ### 6. Explicit loadouts vs. magic schools
 
@@ -320,7 +370,10 @@ the Graybeard Staff). Verify item ids the same way as focus items above.
 ### 8. Contextual loadouts (`conditions`)
 
 Add a loadout-level `"conditions"` object to apply a loadout **only** in certain world
-contexts; it is checked when the mob spawns or loads. Every field is optional.
+contexts. It is a **snapshot**, evaluated when the mob is reconciled — on spawn, on chunk load, on
+`/reload`, on a config change, or when you run `/magicnpcs reconcile`. It is *not* re-evaluated
+continuously: a caster that walks across a biome boundary keeps the loadout it was given until
+something reconciles it again. Every field is optional.
 
 ```json
 {
@@ -384,9 +437,18 @@ A satisfied condition can also raise a spell's pick weight via
 `balance`/`reactive.matchedConditionWeightBonus` (default 1.0 = no bias). Set
 `reactive.enabled = false` to ignore all conditions (spells fall back to role/range only).
 
-### 10. Loadout pools vs. override (`replace`)
+### 10. Which loadout wins: source tier, `replace`, pools
 
-Several loadouts may target the **same** effective key (`entity_type` + optional `profession`).
+When several loadouts target the **same** effective key (`entity_type` + optional `profession`), they
+are resolved at load time in this order:
+
+1. **Source tier** — a loadout from a **datapack** beats one shipped inside a **mod jar**, outright.
+   Your `guardvillagers:guard` JSON replaces the bundled one with no flag to discover. (0.6.0; see
+   [ADR 0003](docs/decisions/0003-loadout-source-tiering.md).)
+2. **`replace`** — among the survivors, if any sets `"replace": true`, only replace-marked loadouts
+   remain. This is the datapack-vs-datapack arbiter.
+3. **Pool** — whatever is left pools.
+
 By default they **pool**: each NPC sticky-picks one variant by `pool_weight` (persisted, so it does
 not change on reload), giving natural variety — e.g. some skeletons are fire-mages, others
 ice-mages. Combine with `conditions` for "this variant only in the nether", etc.
@@ -418,10 +480,128 @@ a mob resolves to and why each is or isn't eligible.
 
 **OpenLoader / modpacks:** drop your loadout at
 `config/openloader/data/<pack>/data/<pack>/spellcasters/<name>.json` (the file name is free; the
-`entity_type` field is the opt-in). Add `"replace": true` to win over anything else targeting that
-entity. Vanilla skeletons cast nothing by default — see the example below.
+`entity_type` field is the opt-in). Add `"replace": true` to win over **another datapack** targeting
+that entity — you no longer need it to beat a loadout Magic NPCs itself ships. Vanilla skeletons cast
+nothing by default — see the example below.
 
-### 11. See also
+### 11. Turning a mob's casting off
+
+Three ways, in increasing order of bluntness:
+
+1. **One JSON file** — a disabled loadout with `"replace": true` suppresses every loadout for that
+   key, including the mod's own. No jar edits, survives `/reload`, and `spells` may be omitted:
+   ```json
+   { "entity_type": "minecraft:skeleton", "enabled": false, "replace": true }
+   ```
+2. **One config line** — add the id to `general.disabledEntityTypes` in `magicnpcs-server.toml`.
+3. **A shipped loadout only** — set its switch to `false` under `[builtinLoadouts]` in
+   `magicnpcs-server.toml`. Exactly equivalent to option 1, without writing a datapack; it affects only
+   the loadouts Magic NPCs itself ships (`recruit`, `bowman`, `crossbowman`, `captain`, `guard`).
+4. **The whole feature** — `general.enableSpellcasting = false`. Since 0.6.2 this takes effect
+   immediately on already-spawned casters, not only on newly loaded ones.
+
+`/magicnpcs validate` and `/magicnpcs loadout id <entity_type>` both report a type that has been
+switched off, so it never looks like a silent failure.
+
+### 12. Mobs with their own ranged attack AI
+
+Since 0.6.0 the casting goal declares **no** `GoalSelector` control flags, so it runs *alongside* a
+mob's built-in attack AI instead of fighting it for the LOOK lock. A witch throws potions **and**
+casts; a bow skeleton shoots **and** casts. (Before 0.6.0 a witch could never cast at all, and a
+skeleton cast *instead of* shooting — one root cause, two opposite symptoms; see
+[ADR 0002](docs/decisions/0002-casting-goal-injection.md).)
+
+Set `"native_attack"` on a loadout to change that:
+
+| Value | Effect |
+|---|---|
+| `"coexist"` *(default)* | Cast alongside the mob's own attack goals. |
+| `"suppress"` | Hold the mob's native ranged/melee attack goals inert — a "pure caster" conversion. Reversible since 0.6.2: the original goals are wrapped rather than destroyed, and are handed back intact when the loadout changes, is removed, or the mod is disabled. **Since 0.6.3 this also switches on caster movement** (below). Every goal taken over is logged by class name. Some mobs re-add theirs (a skeleton does on weapon change). |
+| `"yield"` | Only cast while none of the mob's own attack goals is running. |
+
+Extend the set of goal classes those two policies recognise with
+`general.suppressibleAttackGoals` (simple class names). `"goal_priority"` overrides
+`general.castingGoalPriority` for one entity type.
+
+#### Making a mob a real caster
+
+A mob with a casting loadout but no ranged AI of its own has nothing telling it where to stand. A
+Villager Recruit is the clearest case: Recruits gives *every* recruit a melee attack goal and only
+Bowmen and Crossbowmen a ranged one, so a plain recruit with a spell loadout walks into sword range
+and casts on the way in.
+
+One line fixes it:
+
+```json
+{ "entity_type": "recruits:recruit", "native_attack": "suppress", "replace": true,
+  "max_mana": 120, "mana_regen": 9,
+  "spells": [ { "spell": "irons_spellbooks:magic_missile", "role": "attack",
+                "min_range": 8.0, "max_range": 20.0 } ] }
+```
+
+`"native_attack": "suppress"` holds the mob's own attack goals inert (reversibly), and that in turn
+switches on **caster movement**: the mob backs off when a target comes inside `min_range`, closes
+when it drifts past `max_range`, and otherwise holds the band where its spells are eligible. The
+range comes from the loadout — there is no second "preferred range" setting to keep in step.
+
+It stays out of the way of the mob's own mod. A Recruit told to **hold a position** gets a short
+leash around that post; one **following its owner** a longer one; one in a **formation** or marching
+to a move-to order is pinned and will cast from where it stands. A caster also holds still while a
+channelled spell is in flight, because it re-aims every tick and walking would throw that aim away.
+
+Turn the whole behaviour off with `balance.casterMovement = false`. A loadout left on the default
+`"coexist"` is unaffected either way: the mob keeps its own attack AI and does not reposition, which
+is exactly how every shipped loadout still behaves.
+
+If a mob still never casts, run **`/magicnpcs why <target>`** — it prints every goal as
+`priority | class | flags | running` and names the one blocking the casting goal. A mob that does not
+use the vanilla goal system at all (some animation- or Brain-driven modded mobs) cannot be reached by
+goal injection; an empty or unrelated goal list in that dump is the tell.
+
+### 13. Diagnosing a mob that isn't casting
+
+Every line below is a **complete command**. `/magicnpcs loadout` and `/magicnpcs school` on their own
+are headings — they need a subcommand — and typing one now prints its executable forms rather than a
+syntax error. `<angle brackets>` are placeholders; do not type the brackets.
+
+| Command | Answers |
+|---|---|
+| `/magicnpcs` | the command index, plus what Magic NPCs detected and how many loadouts loaded |
+| `/magicnpcs why <targets>` | **"why is this specific mob, right now, not casting?"** — injection, reconciliation state, the goal environment, state gates, target/line of sight, mana, and a per-spell table with the first blocker for each entry (including *which* entity blocks a friendly-fire check) |
+| `/magicnpcs loadout entity <targets>` | which loadout a mob **would** resolve to, which one its goal is **actually running**, and `STALE` when those differ |
+| `/magicnpcs loadout id <entity_type>` | every loadout declared for a type, plus compat/disable warnings and any file that declares it but never became active |
+| `/magicnpcs validate` | every **discovered** loadout file and its status — active, shadowed, suppressed, or rejected — with the JSON pointer of each problem |
+| `/magicnpcs validate resource <resource_id>` | one loadout file in full (`my_magic:skeleton` for `data/my_magic/spellcasters/skeleton.json`) |
+| `/magicnpcs validate id <entity_type>` | every loadout file targeting one entity type, whatever its status |
+| `/magicnpcs config` | effective settings, the real config file paths, dependency versions, and reconciliation state |
+| `/magicnpcs reconcile [targets]` | re-evaluate managed casting state against the current data, now |
+| `/magicnpcs school pool [school]` | what a magic school's generated pool contains, and the exact filter that dropped each spell |
+| `/magicnpcs school info <targets>` | each NPC's assigned school, its mode (`AUTO` / `MANUAL_SCHOOL` / `MANUAL_DISABLED`) **and which source is actually driving it** |
+| `/magicnpcs spells [filter]` | the valid Iron's spell ids, and whether each is supported, unsupported, or unverified for mob casting |
+
+Copy-paste examples for the nearest skeleton:
+
+```mcfunction
+/magicnpcs loadout id minecraft:skeleton
+/magicnpcs loadout entity @e[type=minecraft:skeleton,sort=nearest,limit=1]
+/magicnpcs why @e[type=minecraft:skeleton,sort=nearest,limit=1]
+/magicnpcs validate
+```
+
+All are op-only. Everything except `/magicnpcs reconcile` is read-only — it writes no entity data and
+draws nothing from a mob's RNG, so running a diagnostic cannot change the world it is describing. The
+server log also prints a per-school pool summary, every rejected loadout file with its errors, and any
+"mod installed but its compat toggle is off" warning on every reload.
+
+**What `/magicnpcs validate` does and does not prove.** It checks loadout *files*: that they were
+discovered, parsed, resolved, and that their spell ids exist and are castable by a mob. It cannot see a
+file placed outside `data/<namespace>/spellcasters/` — such a file is never handed to Magic NPCs at
+all — and it says nothing about whether a particular mob is casting. That second question is
+`/magicnpcs why`. Through 0.6.1 validation read only the successfully parsed loadouts, so a rejected
+file was invisible to it and "no issues found" could coexist with a broken pack; it now reports every
+discovered file, including the rejected ones.
+
+### 14. See also
 
 - **Shipped loadouts** (great references) — bundled in the jar under
   `data/magicnpcs/spellcasters/`: `recruit`, `bowman`, `crossbowman`, `captain`, `guard`. These all
@@ -429,11 +609,15 @@ entity. Vanilla skeletons cast nothing by default — see the example below.
   installed. There is **no** active `minecraft:skeleton` loadout — an example lives at
   [`docs/loadouts/examples/skeleton.json`](docs/loadouts/examples/skeleton.json) to copy into your
   own datapack.
-- [`docs/loadouts/README.md`](docs/loadouts/README.md) — copy-paste examples for optional NPC mods.
+- [`docs/loadouts/README.md`](docs/loadouts/README.md) — copy-paste examples for optional NPC mods,
+  plus a ready [`witch.json`](docs/loadouts/examples/witch.json) and
+  [`skeleton.json`](docs/loadouts/examples/skeleton.json).
 - [`docs/schools.md`](docs/schools.md) — the per-NPC magic-school system.
 - [`docs/irons_spell_ids.md`](docs/irons_spell_ids.md) — valid Iron's spell ids by school.
 - [`docs/mob-friendly-spells.md`](docs/mob-friendly-spells.md) — which spells work well on mobs,
   including the target-locked (`root`, `devour`, `wisp`) and forward-AoE (`stomp`) spells.
+- [`docs/decisions/`](docs/decisions/) — the architectural decision records, including why the
+  casting goal declares no control flags and why a datapack outranks jar data.
 
 ### Aiming: how casters face their target
 
@@ -457,16 +641,27 @@ that, these layers add mod-aware safety:
   and any owned/teamed NPC friendly-fire safety toward its owner and siblings with no
   hard dependency. Toggle `targeting.protectOwners`.
 - **Generic bystander protection** — attack spells won't catch villagers (vanilla,
-  MCA, More Villagers, VillagersPlus), iron golems, players, or tamed pets in their
-  line of fire / blast radius. Toggle `targeting.protectBystanders`.
+  MCA, More Villagers, VillagersPlus), iron golems, or tamed pets in their
+  line of fire / blast radius. Toggle `targeting.protectBystanders`. Players are **not**
+  bystanders by default since 0.6.0 — treating them as such meant a hostile caster fighting one
+  player silently refused to fire while any other player stood near the line. Re-enable with
+  `targeting.protectBystanderPlayers`; the caster's own target is never protected either way.
 
 Other NPC mods (**Guard Villagers, MCA Reborn, MineColonies, Easy NPC, Human
 Companions, More/Plus Villagers**) are supported via **config-gated datapack
-loadouts** — no hard dependency. Each has a toggle under `[compat]` (default **off**);
-enable it, then drop in a loadout for that mod's entity types. A ready Guard Villagers
-loadout ships (inert until `compat.guardvillagers = true`), and copy-paste examples
-for the rest live in [`docs/loadouts/`](docs/loadouts/README.md), which also covers
-the known limitations (profession-scoped casting and trades are future work).
+loadouts** — no hard dependency. Each has a toggle under `[compat]` in
+`config/magicnpcs-common.toml` (default **off**); enable it, then drop in a loadout for that mod's
+entity types. A ready Guard Villagers loadout ships (inert until `compat.guardvillagers = true`), and
+copy-paste examples for the rest live in [`docs/loadouts/`](docs/loadouts/README.md), which also
+covers the known limitations (profession-scoped casting and trades are future work).
+
+**Your datapack always wins over a shipped one.** If you write your own loadout for, say,
+`guardvillagers:guard`, it replaces the bundled one entirely — no `"replace": true` needed. Confirm
+with `/magicnpcs loadout entity <target>`.
+
+**Mobs with their own attack AI** (the vanilla witch, and modded ranged mobs) cast alongside that AI
+as of 0.6.0. Mobs that don't use the vanilla goal system at all cannot be reached by goal injection;
+`/magicnpcs why <target>` makes that visible rather than leaving it a silent failure.
 
 ## Magic schools (recruits & villagers)
 
@@ -474,19 +669,52 @@ Each individual recruit/villager can be assigned a specific Iron's **school** (f
 ice, lightning, holy, ender, blood, evocation, nature, eldritch); its spell pool is
 built dynamically from that school. Assignment is automatic on spawn (persisted), and
 also adjustable per-NPC via the `/magicnpcs school` command or the **School Tome** item
-(right-click to cycle, sneak to clear). Villagers only actually cast when they have a
-target (raids / guard mods) — vanilla passivity is preserved. Full details, including
-the `[schools]` config block, are in [`docs/schools.md`](docs/schools.md).
+(right-click to **inspect**, sneak-right-click to **cycle**; cycling past the last usable school clears it). Villagers only cast offensively when something
+gives them a target: a guard/NPC mod, or the opt-in `schools.villagers.selfDefense`. Raids do **not**
+— vanilla never targets for a villager. Vanilla passivity is otherwise preserved, and a wounded one
+will use a support spell out of combat.
+
+### Manual assignment wins
+
+A school set **by hand** — the Tome or `/magicnpcs school set` — is a per-NPC override. It outranks any
+explicit loadout, including a datapack one, and it survives chunk reloads; clearing it likewise sticks.
+This is what makes the Tome work on Villager Recruits at all: `recruit`, `bowman`, `crossbowman` and
+`captain` ship with built-in loadouts, and an *automatically* assigned school never applies to a mob
+that has an explicit loadout. Automatic assignment precedence is unchanged — explicit loadout first,
+auto school only when none matches.
+
+### Getting the Tome
+
+Craft it: a book ringed by **amethyst shards and lapis**, or — when Iron's Spellbooks is installed —
+by **arcane essence and blank runes**. Exactly one of the two recipes loads, so it is obtainable
+either way. It is also in the Tools & Utilities creative tab.
+
+Run **`/magicnpcs school pool [school]`** to see what a school's generated pool actually contains and
+which filter dropped each spell; the same summary is logged once per reload, so a school that can
+never be assigned is visible without a command. Full details, including the `[schools]` config block,
+are in [`docs/schools.md`](docs/schools.md).
 
 ## Configuration
 
-Server config `config/magicnpcs-server.toml` (auto-synced to clients):
+Magic NPCs has **two** config files (0.6.0; see
+[ADR 0004](docs/decisions/0004-config-split.md)):
 
-- **general** — `enableSpellcasting`, `debugLogging`
+| File | Scope | Holds |
+|---|---|---|
+| `saves/<world>/serverconfig/magicnpcs-server.toml` | **per world**, auto-synced to clients | every gameplay tunable |
+| `config/magicnpcs-common.toml` | **every world** | `[compat]` namespace toggles and `general.debugLogging` — installation facts, not balance |
+
+Per-world gameplay settings:
+
+- **general** — `enableSpellcasting`, `castingGoalPriority`, `castingGoalUsesLookFlag`,
+  `disabledEntityTypes`, `suppressibleAttackGoals`
 - **balance** — `manaMultiplier`, `cooldownMultiplier`, `regenMultiplier`,
   `decisionIntervalTicks`, `castChance`, `minCooldownTicks`, `supportHealthThreshold`,
-  `friendlyFireCheck`, `peacefulDisablesCasting`, `difficultyScaling`
-- **targeting** — `requireLineOfSight`, `castWindupTicks`, `protectBystanders`, `protectOwners`
+  `supportOutOfCombat`, `supportOutOfCombatIntervalTicks`,
+  `friendlyFireCheck`, `peacefulDisablesCasting`, `difficultyScaling`,
+  `casterMovement`, `casterMovementSpeed`, `rankLevelPerRank`, `rankLevelMaxBonus`
+- **targeting** — `requireLineOfSight`, `castWindupTicks`, `protectBystanders`,
+  `protectBystanderPlayers`, `protectOwners`, `protectRaidAllies`, `sittingPetsMayCast`
 - **equipment** — `requireSpellFocus`, `spawnWithGearChance` (both use the
   `magicnpcs:spell_focuses` item tag, which ships pre-filled with Iron's focuses
   (`#irons_spellbooks:school_focus`); add your own staves/spellbooks via a datapack)
@@ -494,14 +722,36 @@ Server config `config/magicnpcs-server.toml` (auto-synced to clients):
   see [Reactive conditions](#9-reactive-conditions))
 - **feedback** — `telegraphs`, `schoolParticles`, `telegraphGlow`, `telegraphVolume`,
   `minDangerTier` (the cast "tell" shown during a caster's wind-up)
-- **spells** — `spellBlacklist`, `spellWhitelist`
-- **recruits** — `enabled`, `manaPerLevel`, `useIronsAI`, `ironsAiSpeed`, `ironsAiIntervalTicks`
-- **compat** — per-mod loadout toggles (`guardvillagers`, `mca`, `minecolonies`,
-  `easynpc`, `humancompanions`, `morevillagers`, `villagersplus`), all default **off**
+- **spells** — `spellBlacklist`, `spellWhitelist`, `allowUnverifiedSpells`
+- **recruits** — `enabled`, `manaPerLevel`
 - **schools** — magic-school assignment (`enableSchools`, `allowedSchools`, `maxRarity`,
-  `maxSpellLevel`, `spellsPerSchool`, weighting, base mana, `schoolAwareFocus`…) with
-  `schools.recruits.*`, `schools.villagers.*`, and command/item toggles — see
-  [`docs/schools.md`](docs/schools.md)
+  `maxSpellLevel`, `spellsPerSchool`, `allowedCastTypes`, weighting, base mana,
+  `schoolAwareFocus`…) with `schools.recruits.*`, `schools.villagers.*`, and command/item
+  toggles — see [`docs/schools.md`](docs/schools.md)
+
+In `config/magicnpcs-common.toml`:
+
+- **general** — `debugLogging`
+- **compat** — per-mod loadout toggles (`guardvillagers`, `mca`, `minecolonies`,
+  `easynpc`, `humancompanions`, `morevillagers`, `villagersplus`), all default **off**.
+  Magic NPCs logs a warning when one of those mods is installed while its toggle is off.
+
+> **Upgrading from 0.5.0 or earlier:** `[compat]` and `general.debugLogging` used to live in the
+> per-world server file. Both locations are read for this release (a toggle is on if *either* file
+> enables it), so nothing resets — but move them to the common file; the server-side copies are
+> removed in 0.7.0. A one-time warning in the log names any key still in the old place.
+
+### Modpack authors: shipping config defaults
+
+- `config/magicnpcs-common.toml` — just ship the file. It is global, so there is nothing else to do.
+- `magicnpcs-server.toml` is **per world**, which is why a plain `config/` copy appears to be
+  ignored. Two supported paths:
+  - **New worlds:** put your file at `defaultconfigs/magicnpcs-server.toml` in the pack root. Forge
+    copies it into every newly created world. This is the correct, supported mechanism.
+  - **An existing world:** the file has to go at
+    `saves/<world>/serverconfig/magicnpcs-server.toml` (single-player) or
+    `<server>/world/serverconfig/magicnpcs-server.toml` (dedicated). Editing `defaultconfigs/`
+    afterwards does not retroactively change a world that already exists.
 
 ### Disabling risky integrations
 

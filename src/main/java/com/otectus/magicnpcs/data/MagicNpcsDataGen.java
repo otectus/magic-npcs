@@ -20,6 +20,7 @@ public final class MagicNpcsDataGen {
     public static void gatherData(GatherDataEvent event) {
         PackOutput output = event.getGenerator().getPackOutput();
         event.getGenerator().addProvider(event.includeServer(), new SpellcasterLoadoutProvider(output));
+        event.getGenerator().addProvider(event.includeServer(), new SchoolTomeRecipeProvider(output));
         event.getGenerator().addProvider(event.includeServer(),
                 new MagicNpcsItemTagsProvider(output, event.getLookupProvider(), event.getExistingFileHelper()));
     }

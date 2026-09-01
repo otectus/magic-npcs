@@ -52,7 +52,10 @@ public record LoadoutConditions(
                 && !difficulties.contains(level.getDifficulty())) {
             return false;
         }
-        if (time != null && time != TimeOfDay.ANY) {
+        // Fixed-time dimensions (Nether, End) report isDay() == false forever, so a "day" gate could
+        // never pass there and a "night" gate would always pass — neither is what an author writing an
+        // overworld day/night variant means. Skip the term entirely where there is no day/night cycle.
+        if (time != null && time != TimeOfDay.ANY && !level.dimensionType().hasFixedTime()) {
             boolean day = level.isDay();
             if ((time == TimeOfDay.DAY) != day) {
                 return false;

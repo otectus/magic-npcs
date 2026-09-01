@@ -6,8 +6,16 @@ fully namespaced as `irons_spellbooks:<id>`.
 > **This list is version-specific and generated from Iron's Spellbooks 1.20.1 **3.16.1**.** Spells are
 > added/renamed between Iron's versions, so the *authoritative* list is always the one in your running
 > game. Run **`/magicnpcs spells`** (or `/magicnpcs spells <text>` to filter) in-game for the live list,
-> including each spell's school, rarity, **default cooldown**, and cast type. Mob-friendly spells are
-> shown in green there.
+> including each spell's school, rarity, **default cooldown**, and cast type.
+>
+> As of 0.6.2 the green "mob-friendly" mark in that command means something stronger than it used to.
+> It was a heuristic — "this spell is INSTANT, so it should be fine". It is now the verdict from a
+> reviewed per-spell manifest derived from the Iron's bytecode, and it has three values: **SUPPORTED**
+> (verified that a mob gets the spell's designed behaviour), **UNSUPPORTED** (verified that it does
+> not, so the spell is never cast and never costs mana), and **UNVERIFIED** (an add-on spell, or one
+> from a newer Iron's than this build was checked against — skipped unless you set
+> `spells.allowUnverifiedSpells`). See `docs/mob-friendly-spells.md` for which spells fall where and
+> why.
 
 ## The namespace gotcha (read this first)
 
@@ -55,7 +63,8 @@ See [mob-friendly-spells.md](mob-friendly-spells.md) for the full suitability gu
 `ray_of_siphoning`, `sacrifice`, ▶`wither_skull`
 
 ### evocation
-`arrow_volley`, `chain_creeper`, `fang_strike`, `fang_swirl`, `fang_ward`, `firecracker`, `gust`,
+`arrow_volley`, `chain_creeper`, `creeper_revenge`, `fang_strike`, `fang_swirl`, `fang_ward`,
+`firecracker`, `gust`,
 `invisibility`, `lob_creeper`, `shield`, `slow`, `spectral_hammer`, `summon_horse`, `summon_vex`,
 `throw`, `wololo`
 
@@ -65,7 +74,7 @@ See [mob-friendly-spells.md](mob-friendly-spells.md) for the full suitability gu
 
 ### eldritch
 `abyssal_shroud`, ▶`eldritch_blast`, `planar_sight`, `pocket_dimension`, `sculk_tentacles`,
-`sonic_boom`, `telekinesis`
+`sonic_boom`, `telekinesis`, `void_tentacles`
 
 > A few spells exist in code but use a slightly different registry id than their class name suggests
 > (e.g. Holy "Angel Wings" registers as `angel_wing`). When in doubt, trust `/magicnpcs spells` over

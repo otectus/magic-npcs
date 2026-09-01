@@ -1,0 +1,53 @@
+{
+  "type": "forge:conditional",
+  "recipes": [
+    {
+      "conditions": [
+        {
+          "type": "forge:not",
+          "value": {
+            "type": "forge:and",
+            "values": [
+              {
+                "type": "forge:mod_loaded",
+                "modid": "irons_spellbooks"
+              },
+              {
+                "type": "forge:item_exists",
+                "item": "irons_spellbooks:arcane_essence"
+              },
+              {
+                "type": "forge:item_exists",
+                "item": "irons_spellbooks:blank_rune"
+              }
+            ]
+          }
+        }
+      ],
+      "recipe": {
+        "type": "minecraft:crafting_shaped",
+        "category": "equipment",
+        "key": {
+          "a": {
+            "item": "minecraft:amethyst_shard"
+          },
+          "b": {
+            "item": "minecraft:book"
+          },
+          "l": {
+            "item": "minecraft:lapis_lazuli"
+          }
+        },
+        "pattern": [
+          " a ",
+          "lbl",
+          " a "
+        ],
+        "result": {
+          "item": "magicnpcs:school_tome"
+        },
+        "show_notification": true
+      }
+    }
+  ]
+}

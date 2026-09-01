@@ -6,7 +6,21 @@ sense of self-positioning, line-of-fire discipline, or combos, so spells that as
 caster at its target right before casting (see the wind-up/aim section in the main README), which makes
 **target-aimed projectile** and **self/support** spells the most reliable choices.
 
-All ids below are `irons_spellbooks:<id>`. Use `/magicnpcs spells` for the live list with cooldowns.
+All ids below are `irons_spellbooks:<id>`. Use `/magicnpcs spells` for the live list with cooldowns
+**and each spell's mob-cast verdict**, which is authoritative — this page is guidance about what plays
+well, the command reports what the mod will actually do.
+
+Since 0.6.2 that verdict is a reviewed per-spell manifest rather than a guess, and it has three values:
+
+| Verdict | Meaning |
+|---|---|
+| `SUPPORTED` | verified: a mob gets the spell's designed behaviour |
+| `UNSUPPORTED` | verified: a mob cannot, so the spell is never cast and never costs mana |
+| `UNVERIFIED` | not in the manifest — an add-on spell, or one from a newer Iron's than this build was checked against. Skipped unless you set `spells.allowUnverifiedSpells = true` |
+
+Through 0.6.1 essentially the whole registry reported as supported, including spells Iron's refuses
+for any non-player caster, so a loadout could look healthy while a spell silently spent mana and did
+nothing.
 
 ## ✅ Reliable projectile spells (best default for attackers)
 Instant, fired straight at the target — exactly what the aim step is built for.
@@ -37,7 +51,9 @@ mob. Mobs won't reposition cleverly, so treat these as opportunistic.
 handling — see the next section.)
 
 ## 🎯 Target-locked & channelled spells (`root`, `devour`, `wisp`, `stomp`)
-These work on mobs as of 0.5.0, but have requirements worth knowing:
+These work on mobs, and since 0.6.2 the channelled ones work *properly*: casting runs Iron's real
+lifecycle, so a long or continuous spell channels, ticks, and completes as designed instead of having
+its final effect invoked once with its whole channel skipped. Requirements worth knowing:
 
 - **`root`, `devour`, `wisp`** read a **target entity** during the cast. Magic NPCs supplies the
   caster's current target automatically, so give them `"role": "attack"` (a `support`/self-cast role
@@ -54,9 +70,9 @@ These work on mobs as of 0.5.0, but have requirements worth knowing:
   "min_range": 0.0, "max_range": 5.0, "safety_radius": 4.0 }
 ```
 
-If a spell needs data a mob can't provide (multi-target or player-only), it's dropped from the
-loadout with a clear log line rather than cast into the void. Use `/magicnpcs loadout entity <target>`
-to see each spell's compatibility category and any skip reason.
+If a spell needs data a mob can't provide, it is dropped from the loadout with a clear log line rather
+than cast into the void. Use `/magicnpcs loadout entity <targets>` or `/magicnpcs validate` to see each
+spell's capability, its verdict, and the reason.
 
 ## 💥 AoE spells (need a high `safety_radius`)
 Big blasts that will hit allies/bystanders unless you widen the friendly-fire clearance. Use
@@ -67,14 +83,25 @@ Big blasts that will hit allies/bystanders unless you widen the friendly-fire cl
 `poison_splash`, `firefly_swarm`, `sculk_tentacles`, `dragon_breath`, `fire_breath`, `poison_breath`,
 `earthquake`, `sunbeam`.
 
-## 🚫 Not recommended for generic mobs
-These need player-like intent — teleporting into position, terrain utility, summons that a mob won't
-manage, or conversions. They'll often appear to "do nothing" on a mob.
+## 🚫 Refused outright (the mod will not cast these)
 
-`teleport`, `recall`, `portal`, `pocket_dimension`, `summon_ender_chest`, `planar_sight`,
-`telekinesis`, `touch_dig`, `wololo`, `counterspell`, `summon_horse`, `summon_vex`, `summon_swords`,
-`summon_polar_bear`, `raise_dead`, `arcane_shackle`, `slow`, `burning_dash`, `thunder_step`,
-`frost_step`, `charge`, `ascension`.
+These are `UNSUPPORTED` in the manifest, so putting one in a loadout is reported at load time and the
+entry is skipped. It costs nothing at runtime — no mana, no cooldown, no wind-up.
+
+| Spell | Why |
+|---|---|
+| `recall`, `pocket_dimension`, `touch_dig`, `portal`, `summon_ender_chest` | Iron's refuses these for any caster that is not a player, or they only do anything for one |
+| `teleport`, `frost_step`, `blood_step`, `burning_dash`, `ray_of_siphoning` | Iron's prepares these through its own casting-mob hooks (teleport destination, dash direction, aiming data) that a foreign mob cannot implement |
+| `flaming_barrage`, `thunder_step` | they read multi-target cast data that nothing builds for a mob |
+| `spectral_hammer` | it mines blocks; there is no combat behaviour for an NPC |
+
+## 😐 Allowed, but rarely what you want
+
+These cast fine and are supported, but need player-like intent to be useful — summons a mob won't
+manage, conversions, or utility with no combat payoff. Expect them to look like they "do nothing".
+
+`planar_sight`, `wololo`, `counterspell`, `summon_horse`, `summon_vex`, `summon_swords`,
+`summon_polar_bear`, `raise_dead`, `arcane_shackle`, `slow`, `charge`, `ascension`, `telekinesis`.
 
 > These are guidelines, not hard rules — a tightly-tuned pack can absolutely use a "melee" or "AoE"
 > spell well. Start from the ✅ lists for hands-off reliability, then experiment.

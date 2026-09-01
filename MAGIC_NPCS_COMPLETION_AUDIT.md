@@ -148,9 +148,8 @@ breadth + example loadouts; H — lang/tag/structure/docs; I — validate. All i
   depth and **not runtime-tested** in this environment (their jars and an Iron's
   runtime are absent). Example loadout entity ids are documented and **must be verified**
   per mod version.
-- **Profession-scoped casting** (More Villagers / VillagersPlus add professions to the
-  vanilla villager *type*) and **magical trade/loot injection** are not implemented —
-  loadouts key on entity type, which can't distinguish a profession.
+- **Magical trade/loot injection** is not implemented. (Profession-scoped casting *is*, as of
+  0.6.0: a loadout may carry an optional `profession` field. This note predates that.)
 - **MCA Reborn** villagers share entity types across roles, so a loadout affects all of
   them; enable `compat.mca` deliberately and pair with a tight `spellWhitelist`.
 - Casting visuals rely on Iron's server-side `onCast` particle/sound spawning; no custom
@@ -202,7 +201,8 @@ Iron's **school**, with its spell pool built dynamically from that school.
   `[schools.villagers]` (`enabled`/`casterChance`/`professionSchools`/`unmappedGetRandom`),
   and command/item toggles. All with `.translation()` keys.
 - **Design choice honored:** villagers get schools but only cast when they hold a target
-  (raids / guard mods) — the goal's existing `mob.getTarget()` requirement enforces it;
+  (a guard mod, or the opt-in `schools.villagers.selfDefense`; **not** raids, which never target for
+  a villager) — the goal's existing `mob.getTarget()` requirement enforces it;
   no new villager AI, vanilla passivity preserved.
 - **Docs:** `docs/schools.md` + README "Magic schools" section.
 - **Validation:** `clean build` ✅, offline `runGameTestServer` ✅ (item registers, boot

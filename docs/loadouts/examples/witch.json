@@ -1,0 +1,36 @@
+{
+  "entity_type": "minecraft:witch",
+  "max_mana": 120,
+  "mana_regen": 9,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:poison_splash",
+      "level": 1,
+      "weight": 3,
+      "min_range": 4.0,
+      "max_range": 18.0,
+      "safety_radius": 3.0,
+      "role": "attack",
+      "cooldown": 160,
+      "windup": 20
+    },
+    {
+      "spell": "irons_spellbooks:magic_missile",
+      "level": 1,
+      "weight": 2,
+      "min_range": 0.0,
+      "max_range": 20.0,
+      "safety_radius": 1.0,
+      "role": "attack",
+      "cooldown": 100
+    },
+    {
+      "spell": "irons_spellbooks:heal",
+      "level": 1,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 400,
+      "condition": { "self_hp_below": 0.4 }
+    }
+  ]
+}

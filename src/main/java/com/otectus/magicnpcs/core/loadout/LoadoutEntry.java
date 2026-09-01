@@ -25,6 +25,13 @@ import net.minecraft.resources.ResourceLocation;
  *                           inherits {@code targeting.castWindupTicks}
  * @param condition          optional reactive trigger gating this spell's eligibility (self/target HP,
  *                           nearby-enemy count, recently-hurt); {@code null} = no extra condition
+ * @param requireHeldItem    when true this spell may only be cast while the caster holds one of
+ *                           {@code requiredItems} (0.6.0, restored in 0.6.2 — audit REL-002).
+ *                           Independent of the global {@code equipment.requireSpellFocus}, which
+ *                           gates <em>all</em> casting on the {@code #magicnpcs:spell_focuses} tag
+ * @param requiredItems      item ids, and/or {@code #namespace:tag} references, satisfying
+ *                           {@code requireHeldItem}; empty falls back to {@code #magicnpcs:spell_focuses}
+ * @param requiredHand       which hand must hold the item — {@link HandRequirement#EITHER} by default
  */
 public record LoadoutEntry(
         ResourceLocation spell,
@@ -38,9 +45,53 @@ public record LoadoutEntry(
         Integer cooldownTicks,
         Double cooldownMultiplier,
         Integer windupTicks,
-        CastCondition condition
+        CastCondition condition,
+        boolean requireHeldItem,
+        java.util.List<String> requiredItems,
+        HandRequirement requiredHand
 ) {
     public enum Role { ATTACK, SUPPORT }
+
+    /** Which hand must satisfy {@link #requireHeldItem()}. */
+    public enum HandRequirement {
+        MAIN("main"), OFF("off"), EITHER("either");
+
+        private final String json;
+
+        HandRequirement(String json) {
+            this.json = json;
+        }
+
+        public String jsonValue() {
+            return json;
+        }
+
+        /** @throws IllegalArgumentException with an actionable message on an unknown value */
+        public static HandRequirement parse(String raw) {
+            for (HandRequirement h : values()) {
+                if (h.json.equalsIgnoreCase(raw) || h.name().equalsIgnoreCase(raw)) {
+                    return h;
+                }
+            }
+            throw new IllegalArgumentException(
+                    "required_hand must be 'main', 'off', or 'either', got '" + raw + "'");
+        }
+    }
+
+    public LoadoutEntry {
+        requiredItems = requiredItems == null ? java.util.List.of() : java.util.List.copyOf(requiredItems);
+        requiredHand = requiredHand == null ? HandRequirement.EITHER : requiredHand;
+    }
+
+    /**
+     * Pre-0.6.2 shape, for call sites that set the tuning fields but no held-item requirement.
+     */
+    public LoadoutEntry(ResourceLocation spell, int level, int weight, double minRange, double maxRange,
+                        double safetyRadius, Role role, Double castChance, Integer cooldownTicks,
+                        Double cooldownMultiplier, Integer windupTicks, CastCondition condition) {
+        this(spell, level, weight, minRange, maxRange, safetyRadius, role, castChance, cooldownTicks,
+                cooldownMultiplier, windupTicks, condition, false, java.util.List.of(), HandRequirement.EITHER);
+    }
 
     /**
      * Back-compat constructor for call sites that don't set the optional tuning fields
@@ -49,6 +100,7 @@ public record LoadoutEntry(
      */
     public LoadoutEntry(ResourceLocation spell, int level, int weight,
                         double minRange, double maxRange, double safetyRadius, Role role) {
-        this(spell, level, weight, minRange, maxRange, safetyRadius, role, null, null, null, null, null);
+        this(spell, level, weight, minRange, maxRange, safetyRadius, role, null, null, null, null, null,
+                false, java.util.List.of(), HandRequirement.EITHER);
     }
 }

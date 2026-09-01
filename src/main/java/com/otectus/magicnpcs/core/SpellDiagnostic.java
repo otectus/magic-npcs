@@ -8,9 +8,16 @@ package com.otectus.magicnpcs.core;
  * @param id              the resolved (or raw, if unknown) registry id
  * @param exists          true if the id resolves to a registered Iron's spell
  * @param enabled         true if that spell is enabled in Iron's config
- * @param category        the {@code SpellCompat.Category} name (e.g. {@code TARGET_ENTITY_REQUIRED})
+ * @param category        the reviewed mob-cast capability name (e.g. {@code TARGET_ENTITY})
  * @param castType        Iron's cast type ({@code INSTANT}/{@code LONG}/{@code CONTINUOUS}/{@code NONE})
- * @param supportedForMob true if a generic mob caster can cast this category at all
+ * @param support         {@code SUPPORTED}, {@code UNSUPPORTED}, or {@code UNVERIFIED}. Since 0.6.2
+ *                        these are three distinct answers: "we checked and a mob can do it", "we
+ *                        checked and it cannot", and "this spell is not in the manifest this build was
+ *                        verified against" (audit SPI-002). 0.6.1 collapsed all three into "supported"
+ * @param willCast        true if the mob would actually attempt this spell right now — an
+ *                        {@code UNVERIFIED} spell only casts when {@code spells.allowUnverifiedSpells}
+ *                        is on
+ * @param unsupportedReason a short, actionable explanation when {@code support} is not SUPPORTED
  * @param requiresTarget  true if it needs a target entity (the mob must have a target to cast it)
  * @param baseCooldownTicks Iron's default cooldown in ticks (before loadout/config overrides)
  */
@@ -20,7 +27,19 @@ public record SpellDiagnostic(
         boolean enabled,
         String category,
         String castType,
-        boolean supportedForMob,
+        String support,
+        boolean willCast,
+        String unsupportedReason,
         boolean requiresTarget,
         int baseCooldownTicks
-) {}
+) {
+    /** @return true when a mob may actually cast this spell — the flag callers should gate on. */
+    public boolean supportedForMob() {
+        return willCast;
+    }
+
+    /** @return true when the spell is outside the verified manifest for this build. */
+    public boolean unverified() {
+        return "UNVERIFIED".equals(support);
+    }
+}
