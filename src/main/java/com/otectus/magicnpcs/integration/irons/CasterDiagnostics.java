@@ -157,6 +157,9 @@ public final class CasterDiagnostics {
         }
         out.detail("adapters: " + String.join(" + ", NpcAdapters.describe(mob)));
         describeMovement(out, mob, state);
+        // Whatever the NPC's own mod knows that we do not — paused, factioned, immovable. Registered
+        // behind that mod's compat guard, so this call is a no-op when none is installed.
+        com.otectus.magicnpcs.core.diag.DiagnosticContributors.describeAll(mob, out);
     }
 
     /**

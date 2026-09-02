@@ -54,3 +54,20 @@ mandatory=false
 versionRange="[1.15.0,)"
 ordering="AFTER"
 side="BOTH"
+
+# Soft-dep on Easy NPC's CORE module. Easy NPC 7.x is three separately published mods; `easy_npc` is
+# the one that owns the classes this integration compiles against. The optional configuration-UI
+# module (`easy_npc_config_ui`) is deliberately NOT declared: nothing here needs it, and a core-only
+# install must stay fully supported.
+#
+# The range is narrow because Easy NPC says so itself. Its api/package-info.java states the API "is
+# currently in development" and that "breaking changes may occur in minor versions during the
+# experimental phase" — this build was written against 7.11.0's ObjectiveRegistry, ActionRegistry,
+# ConditionRegistry and EasyNPCEventRegistry, and admitting an unbounded range would be claiming
+# support for shapes it has never seen.
+[[dependencies.magicnpcs]]
+modId="easy_npc"
+mandatory=false
+versionRange="[7.11,8.0)"
+ordering="AFTER"
+side="BOTH"

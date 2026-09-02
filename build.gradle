@@ -85,6 +85,12 @@ dependencies {
     // Iron's Spellbooks is a soft dependency: compile against it, do NOT bundle it.
     compileOnly fg.deobf("curse.maven:${irons_spellbooks_project}:${irons_spellbooks_file}")
 
+    // Easy NPC is a soft dependency: compile against the CurseForge "Easy NPC: Core" jar, do NOT
+    // bundle it. Core is the module that actually ships classes (the bundle is dependency-only), and
+    // its jar is reobfuscated, so fg.deobf is required. See gradle.properties for why this is pinned
+    // by file id rather than by version string.
+    compileOnly fg.deobf("curse.maven:${easy_npc_project}:${easy_npc_file}")
+
     // Villager Recruits is a soft dependency: compile against the local jar (libs/), do NOT bundle
     // it (All Rights Reserved). flatDir + fg.deobf remaps it to the workspace mappings.
     // The jar is gitignored, so a fresh clone does not have it — declare the dependency only when it
@@ -96,6 +102,14 @@ dependencies {
     // Phase 7 dev-runtime (-PdevRuntime): load Iron's + its mandatory deps (GeckoLib/Curios/
     // PlayerAnimator) + Recruits at runtime so casting can actually run. runtimeOnly → never
     // shipped or committed; versions pinned to Iron's 3.15.x requirements. See docs/dev-runtime.md.
+    // Easy NPC on its own (-PeasyNpcRuntime), without the Iron's stack. The full -PdevRuntime needs
+    // several jars staged by hand in libs/; this boots Magic NPCs + Easy NPC from CurseMaven alone,
+    // which is enough to prove the adapter, the diagnostics contributor and the compat guards
+    // classload and register correctly. The casting hooks need Iron's and stay dormant here — which is
+    // itself the "Easy NPC present, Iron's absent" case worth having a check for.
+    if (project.hasProperty('easyNpcRuntime') && !project.hasProperty('devRuntime')) {
+        runtimeOnly fg.deobf("curse.maven:${easy_npc_project}:${easy_npc_file}")
+    }
     if (project.hasProperty('devRuntime')) {
         // Full Iron's runtime stack from local libs/ jars (the user's pack versions), so the
         // dev runtime matches production and needs no network for Iron's/GeckoLib/PlayerAnimator.
@@ -106,6 +120,7 @@ dependencies {
         runtimeOnly fg.deobf("maven.modrinth:curios:5.14.1+1.20.1")
         runtimeOnly fg.deobf("blank:player-animation-lib-forge:1.0.2-rc1+1.20")     // libs/player-animation-lib-forge-*.jar
         runtimeOnly fg.deobf("blank:recruits:${recruits_jar_version}")              // libs/recruits-1.20.1-1.15.0.jar
+        runtimeOnly fg.deobf("curse.maven:${easy_npc_project}:${easy_npc_file}")    // Easy NPC: Core
     }
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'

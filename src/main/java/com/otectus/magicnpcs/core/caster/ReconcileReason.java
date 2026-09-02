@@ -20,6 +20,10 @@ public enum ReconcileReason {
     PROFESSION_CHANGE,
     /** An operator asked for it explicitly with {@code /magicnpcs reconcile}. */
     ADMIN_COMMAND,
+    /** An Easy NPC objective asked for its casting goal. */
+    EASY_NPC_OBJECTIVE,
+    /** An Easy NPC changed state, so a state-gated decision may now go the other way. */
+    EASY_NPC_STATE,
     /** A GameTest drove it directly. */
     TEST
 }

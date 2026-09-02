@@ -145,7 +145,13 @@ public class IronsSpellcasterHandler {
     /** Drain the reconciliation queue in bounded batches so a large world does not stall a tick. */
     @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
-        if (event.phase != TickEvent.Phase.END || PENDING.isEmpty()) {
+        if (event.phase != TickEvent.Phase.END) {
+            return;
+        }
+        // Casts nobody's goal owns (an Easy NPC dialog button, a scripted action) still have to be
+        // advanced to completion, or they charge mana and hang mid-channel forever.
+        DetachedCastDriver.tickAll();
+        if (PENDING.isEmpty()) {
             return;
         }
         int budget = MagicNpcsConfig.reconcileBatchSize();
@@ -349,11 +355,14 @@ public class IronsSpellcasterHandler {
         NpcAdapter adapter = NpcAdapters.resolve(mob);
         RandomSource rng = mob.getRandom();
 
-        // Recruit-style progression NPC.
-        if (adapter.schoolAssignable(mob) && MagicNpcsConfig.SCHOOLS_RECRUITS_ENABLED.get()
-                && adapter.level(mob) >= MagicNpcsConfig.SCHOOLS_RECRUITS_MIN_RANK.get()) {
-            if (rng.nextDouble() < MagicNpcsConfig.SCHOOLS_RECRUITS_CASTER_CHANCE.get()) {
-                ResourceLocation s = pickRecruitSchool(mob, adapter, rng);
+        // Progression NPC (a Villager Recruit, an Easy NPC, or any future adapter that publishes a
+        // policy). The settings come from the owning mod's adapter rather than being read here, so a
+        // second progression mod is no longer silently governed by the first one's config section.
+        NpcAdapter.SchoolRollPolicy policy = adapter.schoolRollPolicy(mob);
+        if (adapter.schoolAssignable(mob) && policy != null && policy.enabled()
+                && adapter.level(mob) >= policy.minLevel()) {
+            if (rng.nextDouble() < policy.casterChance()) {
+                ResourceLocation s = pickProgressionSchool(mob, adapter, policy, rng);
                 if (s != null) {
                     SchoolData.set(mob, s);
                     return s;
@@ -393,15 +402,18 @@ public class IronsSpellcasterHandler {
         return null;
     }
 
-    private static ResourceLocation pickRecruitSchool(Mob mob, NpcAdapter adapter, RandomSource rng) {
+    private static ResourceLocation pickProgressionSchool(Mob mob, NpcAdapter adapter,
+                                                         NpcAdapter.SchoolRollPolicy policy,
+                                                         RandomSource rng) {
         List<ResourceLocation> allowed = MagicNpcsConfig.allowedSchoolIds();
         if (allowed.isEmpty()) {
             return null;
         }
-        return switch (MagicNpcsConfig.SCHOOLS_RECRUITS_MODE.get().toUpperCase(Locale.ROOT)) {
+        String mode = policy.mode() == null ? "RANDOM" : policy.mode().toUpperCase(Locale.ROOT);
+        return switch (mode) {
             case "BY_TYPE" -> {
                 Map<ResourceLocation, List<ResourceLocation>> map =
-                        MagicNpcsConfig.parsePairMap(MagicNpcsConfig.SCHOOLS_RECRUITS_TYPE_SCHOOLS.get());
+                        MagicNpcsConfig.parsePairMap(policy.typeSchools());
                 List<ResourceLocation> opts = intersect(map.get(EntityType.getKey(mob.getType())), allowed);
                 yield (opts.isEmpty() ? allowed : opts).get(rng.nextInt(opts.isEmpty() ? allowed.size() : opts.size()));
             }

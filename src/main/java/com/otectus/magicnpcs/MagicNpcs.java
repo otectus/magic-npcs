@@ -1,10 +1,12 @@
 package com.otectus.magicnpcs;
 
+import com.otectus.magicnpcs.compat.EasyNpcCompat;
 import com.otectus.magicnpcs.compat.IronsCompat;
 import com.otectus.magicnpcs.compat.RecruitsCompat;
 import com.otectus.magicnpcs.compat.generic.OwnableTeamAdapter;
 import com.otectus.magicnpcs.compat.generic.RaidAllyAdapter;
 import com.otectus.magicnpcs.compat.generic.SittingPetAdapter;
+import com.otectus.magicnpcs.compat.easynpc.EasyNpcIntegration;
 import com.otectus.magicnpcs.compat.recruits.RecruitsIntegration;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
@@ -81,6 +83,13 @@ public class MagicNpcs {
         if (RecruitsCompat.isLoaded()) {
             RecruitsIntegration.init();
         }
+
+        // Easy NPC likewise registers independently of Iron's. Its adapter is always active once the
+        // mod is present, because owner/faction protection must not depend on a feature toggle; the
+        // [easynpc] toggle governs casting, not safety.
+        if (EasyNpcCompat.isLoaded()) {
+            EasyNpcIntegration.init();
+        }
     }
 
     /**
@@ -136,8 +145,10 @@ public class MagicNpcs {
                 .map(c -> c.getModInfo().getVersion().toString()).orElse("unknown");
         String build = pkg == null || pkg.getImplementationVersion() == null
                 ? "unknown build" : pkg.getImplementationVersion();
-        LOGGER.info("Magic NPCs {} ({}) | Iron's Spellbooks: {} | Villager Recruits: {} | verified against {}",
+        LOGGER.info("Magic NPCs {} ({}) | Iron's Spellbooks: {} | Villager Recruits: {} | "
+                        + "Easy NPC: {} (config UI: {}) | verified against {}",
                 version, build, dependencyVersion("irons_spellbooks"), dependencyVersion("recruits"),
+                dependencyVersion("easy_npc"), dependencyVersion("easy_npc_config_ui"),
                 IRONS_VERIFIED_RANGE);
         LOGGER.info("Config: <world>/serverconfig/magicnpcs-server.toml (per world) and "
                 + "config/magicnpcs-common.toml (all worlds). Run /magicnpcs config in game.");
@@ -153,5 +164,11 @@ public class MagicNpcs {
     @SubscribeEvent
     public void onServerStopped(ServerStoppedEvent event) {
         ManagedCasterState.clearAll();
+        if (IronsCompat.isLoaded()) {
+            com.otectus.magicnpcs.integration.irons.DetachedCastDriver.clearAll();
+        }
+        if (EasyNpcCompat.isLoaded()) {
+            EasyNpcIntegration.shutdown();
+        }
     }
 }

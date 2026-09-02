@@ -49,6 +49,10 @@
 
   "magicnpcs.configuration.recruits.enabled": "Enable Villager Recruits adapter",
   "magicnpcs.configuration.recruits.manaPerLevel": "Recruit mana per rank",
+  "magicnpcs.configuration.easynpc.enabled": "Enable Easy NPC adapter",
+  "magicnpcs.configuration.easynpc.manaPerLevel": "Easy NPC mana per level",
+  "magicnpcs.configuration.easynpc.useObjective": "Register Easy NPC casting objective",
+  "magicnpcs.configuration.easynpc.respectFactions": "Respect Easy NPC factions",
 
   "magicnpcs.configuration.compat.guardvillagers": "Guard Villagers loadouts",
   "magicnpcs.configuration.compat.mca": "MCA Reborn loadouts",
@@ -76,6 +80,11 @@
   "magicnpcs.configuration.schools.recruits.assignmentMode": "Recruit assignment mode",
   "magicnpcs.configuration.schools.recruits.typeSchools": "Recruit type→school map",
   "magicnpcs.configuration.schools.recruits.minRankToCast": "Recruit min rank to cast",
+  "magicnpcs.configuration.schools.easynpc.enabled": "Assign schools to Easy NPCs",
+  "magicnpcs.configuration.schools.easynpc.casterChance": "Easy NPC caster chance",
+  "magicnpcs.configuration.schools.easynpc.assignmentMode": "Easy NPC assignment mode",
+  "magicnpcs.configuration.schools.easynpc.typeSchools": "Easy NPC type→school map",
+  "magicnpcs.configuration.schools.easynpc.minLevelToCast": "Easy NPC min level to cast",
   "magicnpcs.configuration.schools.villagers.enabled": "Assign schools to villagers",
   "magicnpcs.configuration.schools.villagers.casterChance": "Villager caster chance",
   "magicnpcs.configuration.schools.villagers.professionSchools": "Profession→school map",

@@ -85,6 +85,10 @@ public final class MagicNpcsConfig {
     public static final ForgeConfigSpec.IntValue FEEDBACK_MIN_DANGER_TIER;
     public static final ForgeConfigSpec.BooleanValue RECRUITS_INTEGRATION_ENABLED;
     public static final ForgeConfigSpec.DoubleValue RECRUITS_MANA_PER_LEVEL;
+    public static final ForgeConfigSpec.BooleanValue EASYNPC_INTEGRATION_ENABLED;
+    public static final ForgeConfigSpec.DoubleValue EASYNPC_MANA_PER_LEVEL;
+    public static final ForgeConfigSpec.BooleanValue EASYNPC_USE_OBJECTIVE;
+    public static final ForgeConfigSpec.BooleanValue EASYNPC_RESPECT_FACTIONS;
 
     // Per-mod compat toggles for NPC mods we cannot compile against. They gate
     // whether datapack loadouts targeting that mod's entity-type namespace apply.
@@ -145,6 +149,12 @@ public final class MagicNpcsConfig {
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SCHOOLS_RECRUITS_TYPE_SCHOOLS;
     public static final ForgeConfigSpec.IntValue SCHOOLS_RECRUITS_MIN_RANK;
 
+    public static final ForgeConfigSpec.BooleanValue SCHOOLS_EASYNPC_ENABLED;
+    public static final ForgeConfigSpec.DoubleValue SCHOOLS_EASYNPC_CASTER_CHANCE;
+    public static final ForgeConfigSpec.ConfigValue<String> SCHOOLS_EASYNPC_MODE;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SCHOOLS_EASYNPC_TYPE_SCHOOLS;
+    public static final ForgeConfigSpec.IntValue SCHOOLS_EASYNPC_MIN_LEVEL;
+
     public static final ForgeConfigSpec.BooleanValue SCHOOLS_VILLAGERS_ENABLED;
     public static final ForgeConfigSpec.DoubleValue SCHOOLS_VILLAGERS_CASTER_CHANCE;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SCHOOLS_VILLAGERS_PROFESSION_SCHOOLS;
@@ -176,7 +186,11 @@ public final class MagicNpcsConfig {
             // recruit kept charging into sword range to cast. Suppression is reversible (the goal is
             // wrapped, not destroyed), so listing it by default costs nothing when unused.
             "RecruitMeleeAttackGoal", "RecruitRangedBowAttackGoal", "RecruitRangedCrossbowAttackGoal",
-            "RecruitRangedMusketAttackGoal");
+            "RecruitRangedMusketAttackGoal",
+            // Easy NPC's attack objectives (de.markusbordihn.easynpc.entity.easynpc.ai.goal). Its
+            // ZombieAttackGoal shares a simple name with the vanilla entry above, which already covers
+            // it — matching is by simple name precisely so mods we cannot import are reachable.
+            "BowAttackGoal", "CrossbowAttackGoal", "GunAttackGoal", "CustomMeleeAttackGoal");
 
     private static final String TKEY = "magicnpcs.configuration.";
 
@@ -232,7 +246,7 @@ public final class MagicNpcsConfig {
         LEGACY_DEBUG_LOGGING = b
                 .comment("DEPRECATED — moved to config/magicnpcs-common.toml as of 0.6.0.",
                         "Still read for one release: if either file sets it true, debug logging is on.",
-                        "This copy is removed in 0.7.0.")
+                        "This copy is removed in 0.8.0.")
                 .translation(TKEY + "debugLogging")
                 .define("debugLogging", false);
         b.pop();
@@ -450,6 +464,36 @@ public final class MagicNpcsConfig {
                 .defineInRange("manaPerLevel", 0.10D, 0.0D, 100.0D);
         b.pop();
 
+        b.push("easynpc");
+        b.comment("Easy NPC integration. Separate from [compat].easynpc, which only decides whether datapack",
+                "loadouts naming an 'easy_npc:' entity type apply at all; these govern the adapter itself.",
+                "Off by default: an Easy NPC is a hand-authored character, and giving one spells should be a",
+                "deliberate act. Owner and faction protection stay active either way — turning the integration",
+                "off stops Easy NPCs casting, it never removes the rules about who they may not cast at.");
+        EASYNPC_INTEGRATION_ENABLED = b
+                .comment("Enable the Easy NPC adapter (level-scaled mana + owner/faction-aware targeting).")
+                .translation(TKEY + "easynpc.enabled")
+                .define("enabled", false);
+        EASYNPC_MANA_PER_LEVEL = b
+                .comment("Extra max-mana fraction per Easy NPC experience level (e.g. 0.05 = +5% per level).",
+                        "Easy NPC progression runs to level 60, so this compounds much further than the Recruits",
+                        "equivalent — the default is deliberately a fifth of it.")
+                .translation(TKEY + "easynpc.manaPerLevel")
+                .defineInRange("manaPerLevel", 0.02D, 0.0D, 100.0D);
+        EASYNPC_USE_OBJECTIVE = b
+                .comment("Register 'magicnpcs:cast_spell' as an Easy NPC custom objective, so casting can be",
+                        "attached to an NPC through Easy NPC's own objective system (presets, commands) rather",
+                        "than only by a datapack loadout. Turning this off does not stop loadouts working.")
+                .translation(TKEY + "easynpc.useObjective")
+                .define("useObjective", true);
+        EASYNPC_RESPECT_FACTIONS = b
+                .comment("Route target selection through Easy NPC's own faction rules, so an NPC never casts at",
+                        "something its faction is not hostile to. Turn off only if you want Easy NPCs to use the",
+                        "generic owner/team rules alone.")
+                .translation(TKEY + "easynpc.respectFactions")
+                .define("respectFactions", true);
+        b.pop();
+
         b.push("builtinLoadouts");
         b.comment("Per-loadout switches for the spellcaster loadouts Magic NPCs itself ships.",
                 "Each shipped loadout targets an OPTIONAL NPC mod and is already inert when that mod is",
@@ -461,7 +505,7 @@ public final class MagicNpcsConfig {
         b.push("compat");
         b.comment("DEPRECATED as of 0.6.0 — these moved to config/magicnpcs-common.toml, which applies to",
                 "every world instead of being per-save. They are still read for one release: a toggle is on",
-                "if EITHER file enables it. This block is removed in 0.7.0.");
+                "if EITHER file enables it. This block is removed in 0.8.0.");
         LEGACY_NAMESPACE_TOGGLES = defineCompatToggles(b, true);
         b.pop();
 
@@ -566,6 +610,31 @@ public final class MagicNpcsConfig {
                 .comment("Minimum recruit XP rank to be eligible for a school.")
                 .translation(TKEY + "schools.recruits.minRankToCast")
                 .defineInRange("minRankToCast", 0, 0, 100);
+        b.pop();
+
+        b.push("easynpc");
+        SCHOOLS_EASYNPC_ENABLED = b
+                .comment("Assign schools to Easy NPCs automatically.",
+                        "Off by default, unlike recruits and villagers: an Easy NPC is authored deliberately, and",
+                        "a pack author who has hand-built a character does not expect it to roll a random school.")
+                .translation(TKEY + "schools.easynpc.enabled")
+                .define("enabled", false);
+        SCHOOLS_EASYNPC_CASTER_CHANCE = b
+                .comment("Chance [0..1] a spawned Easy NPC becomes a school caster (rolled once, persisted).")
+                .translation(TKEY + "schools.easynpc.casterChance")
+                .defineInRange("casterChance", 0.25D, 0.0D, 1.0D);
+        SCHOOLS_EASYNPC_MODE = b
+                .comment("School assignment: RANDOM (from allowedSchools), BY_TYPE (typeSchools map), BY_RANK.")
+                .translation(TKEY + "schools.easynpc.assignmentMode")
+                .define("assignmentMode", "RANDOM", MagicNpcsConfig::isAssignmentMode);
+        SCHOOLS_EASYNPC_TYPE_SCHOOLS = b
+                .comment("BY_TYPE map: 'entityType=school[,school]', e.g. 'easy_npc:humanoid=irons_spellbooks:fire'.")
+                .translation(TKEY + "schools.easynpc.typeSchools")
+                .defineListAllowEmpty("typeSchools", () -> List.<String>of(), MagicNpcsConfig::isPairMapping);
+        SCHOOLS_EASYNPC_MIN_LEVEL = b
+                .comment("Minimum Easy NPC experience level to be eligible for a school (progression runs 0-60).")
+                .translation(TKEY + "schools.easynpc.minLevelToCast")
+                .defineInRange("minLevelToCast", 0, 0, 100);
         b.pop();
 
         b.push("villagers");
@@ -775,7 +844,7 @@ public final class MagicNpcsConfig {
             com.otectus.magicnpcs.MagicNpcs.LOGGER.warn(
                     "magicnpcs-server.toml still sets {} in the deprecated location(s) [{}]. They are honoured "
                             + "for this release, but move them to config/magicnpcs-common.toml — the server-side "
-                            + "copies are removed in 0.7.0.",
+                            + "copies are removed in 0.8.0.",
                     stale.size(), String.join(", ", stale));
         }
     }

@@ -51,6 +51,34 @@ public interface NpcAdapter {
     }
 
     /**
+     * How this NPC's owning mod wants automatic school assignment done, or {@code null} when it has no
+     * opinion and the built-in rules apply.
+     *
+     * <p>Exists so the assignment code does not have to know which progression mod it is looking at.
+     * Before this, the recruit branch read {@code [schools.recruits]} directly, so any adapter that
+     * answered {@link #schoolAssignable} true — Easy NPC being the first — was silently governed by
+     * Villager Recruits' caster chance and rank threshold, and its own settings did nothing.
+     *
+     * <p>Returned by the same single provider as {@link #manaScale} and {@link #level}: combining two
+     * mods' assignment rules is not meaningful, and a progression NPC belongs to one mod.
+     */
+    default SchoolRollPolicy schoolRollPolicy(Mob mob) {
+        return null;
+    }
+
+    /**
+     * One mod's automatic school-assignment settings.
+     *
+     * @param enabled      whether this mod's NPCs are assigned schools at all
+     * @param casterChance chance [0..1] that an eligible NPC becomes a caster, rolled once and persisted
+     * @param minLevel     the {@link #level(Mob)} an NPC must reach to be eligible
+     * @param mode         {@code RANDOM}, {@code BY_TYPE} or {@code BY_RANK}
+     * @param typeSchools  the {@code BY_TYPE} map, as {@code "entityType=school[,school]"} entries
+     */
+    record SchoolRollPolicy(boolean enabled, double casterChance, int minLevel, String mode,
+                            java.util.List<? extends String> typeSchools) {}
+
+    /**
      * @return false to suppress all casting right now for a mod-specific reason
      *         (e.g. a recruit commanded to a passive/hold state, an NPC trading or
      *         working). Vanilla invalid states (dead, sleeping, removed, no-AI) are

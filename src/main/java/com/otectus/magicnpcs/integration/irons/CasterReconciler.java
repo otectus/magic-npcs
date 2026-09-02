@@ -5,6 +5,7 @@ import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import com.otectus.magicnpcs.core.LoadoutData;
 import com.otectus.magicnpcs.core.SchoolData;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
+import com.otectus.magicnpcs.core.caster.CasterGoalListeners;
 import com.otectus.magicnpcs.core.caster.CasterMovementGoal;
 import com.otectus.magicnpcs.core.caster.ManagedCasterState;
 import com.otectus.magicnpcs.core.caster.ReconcileReason;
@@ -252,6 +253,9 @@ public final class CasterReconciler {
                     replacing ? "replaced" : "installed", priority, loadout.source(),
                     loadout.tier().label(), loadout.nativeAttack().jsonValue());
         }
+        // Anything holding a reference to the previous goal object has just been left with a dead
+        // one; tell it before it can re-add it (see CasterGoalListeners).
+        CasterGoalListeners.fireGoalChanged(mob);
         return ReconcileResult.of(replacing ? ReconcileResult.Outcome.UPDATED
                 : ReconcileResult.Outcome.INSTALLED, ReconcileResult.ReasonCode.OK);
     }
@@ -272,6 +276,7 @@ public final class CasterReconciler {
         }
         // A wind-up that was running when the goal went away leaves its glow behind.
         com.otectus.magicnpcs.core.feedback.Telegraphs.clearStrandedGlow(mob);
+        CasterGoalListeners.fireGoalChanged(mob);
         return ReconcileResult.of(ReconcileResult.Outcome.REMOVED, reason, detail);
     }
 

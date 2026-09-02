@@ -100,7 +100,7 @@ Nested key sets: `equipment` (`mainhand`, `offhand`, `item`, `weight`, `chance`,
 | `spells` | `spellBlacklist`, `spellWhitelist`, `allowUnverifiedSpells` *(0.6.2)* |
 | `recruits` | `enabled`, `manaPerLevel` — the three `ironsAi*` keys were **removed in 0.6.3** |
 | `builtinLoadouts` | `recruit`, `bowman`, `crossbowman`, `captain`, `guard` — 0.6.0, **absent in 0.6.1**, restored 0.6.2 |
-| `compat` | *deprecated copies of the common-config toggles; removed in 0.7.0* |
+| `compat` | *deprecated copies of the common-config toggles; removed in 0.8.0* |
 | `schools` | `enableSchools`, `allowedSchools`, `maxRarity`, `maxSpellLevel`, `spellsPerSchool`, `includeSupportSpells`, `supportSpellIds`, `allowedCastTypes`, `weightingMode`, `attackMaxRange`, `baseMaxMana`, `baseManaRegen`, `schoolAwareFocus` |
 | `schools.recruits` | `enabled`, `casterChance`, `assignmentMode`, `typeSchools`, `minRankToCast` |
 | `schools.villagers` | `enabled`, `casterChance`, `professionSchools`, `selfDefense`, `unmappedGetRandom` |

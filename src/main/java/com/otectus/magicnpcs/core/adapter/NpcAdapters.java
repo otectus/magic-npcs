@@ -124,6 +124,11 @@ public final class NpcAdapters {
         }
 
         @Override
+        public SchoolRollPolicy schoolRollPolicy(Mob mob) {
+            return primary.schoolRollPolicy(mob);
+        }
+
+        @Override
         public boolean schoolAssignable(Mob mob) {
             for (NpcAdapter adapter : all) {
                 if (adapter.schoolAssignable(mob)) {

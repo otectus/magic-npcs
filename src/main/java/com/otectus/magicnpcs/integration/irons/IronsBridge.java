@@ -207,6 +207,15 @@ public final class IronsBridge {
         return id == null || MagicNpcsConfig.isAllowed(id.toString());
     }
 
+    /**
+     * @return the caster's current mana. Iron's-free callers (commands, the Easy NPC dialog
+     *         conditions) need this without importing {@code MagicData}, which is the whole point of
+     *         this bridge.
+     */
+    public static float currentMana(LivingEntity caster) {
+        return MagicData.getPlayerMagicData(caster).getMana();
+    }
+
     /** Fill the mob's mana to its max (called on spawn/join). */
     public static void initMana(LivingEntity caster) {
         AttributeInstance max = caster.getAttribute(AttributeRegistry.MAX_MANA.get());

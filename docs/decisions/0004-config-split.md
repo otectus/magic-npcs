@@ -46,7 +46,7 @@ compatEnabled(ns) == COMMON_TOGGLE.get() || LEGACY_SERVER_TOGGLE.get()
 
 Because every moved key is a boolean defaulting to `false`, OR-ing is exactly "whatever you had switched
 on stays on". A one-time WARN names any legacy key still carrying a non-default value and tells the user
-where to move it. The legacy block is scheduled for removal in 0.7.0 and is documented as such in
+where to move it. The legacy block is scheduled for removal in 0.8.0 (deferred from 0.7.0, which shipped the Easy NPC integration and deliberately carried no config migration) and is documented as such in
 `CHANGELOG.md` under **Migration**.
 
 **Documentation is half the fix.** `README.md` gains a "Modpack authors" section giving the exact paths:

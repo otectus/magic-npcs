@@ -148,7 +148,7 @@ owner/team adapter (`targeting.protectOwners`).
 }
 ```
 
-### Easy NPC — `easy_npc:humanoid` (verify; Easy NPC ids vary by variant)
+### Easy NPC — `easy_npc:humanoid`
 ```json
 {
   "entity_type": "easy_npc:humanoid",
@@ -160,6 +160,47 @@ owner/team adapter (`targeting.protectOwners`).
   ]
 }
 ```
+Needs `compat.easynpc = true` **and** `easynpc.enabled = true` — the first admits loadouts on the
+`easy_npc:` namespace, the second switches on the adapter that makes Easy NPCs cast. Both default off.
+
+Easy NPC registers one entity type per NPC variant, all in the `easy_npc` namespace. The ones a
+loadout is most likely to name, read from Easy NPC Core 7.11.0:
+
+`humanoid`, `humanoid_slim`, `villager`, `wandering_trader`, `orc`, `orc_warrior`, `fairy`, `doppler`,
+`illusioner`, `evoker`, `vindicator`, `pillager`, `witch`, `skeleton`, `skeleton_bogged`, `stray`,
+`wither_skeleton`, `zombie`, `zombie_villager`, `husk`, `drowned`, `piglin`, `piglin_brute`,
+`zombified_piglin`, `iron_golem`, `vex`, `allay`, `cat`, `wolf`, `fox`, `chicken`, `pig`, `horse`,
+`skeleton_horse`, `zombie_horse`, `spider`, `cave_spider`, `creeper`, `enderman`, `ghast`, `slime`.
+
+(There are also `epic_fight_*_raw` and `cobblemon_npc` variants that exist only when those mods are
+installed.) A loadout names one variant, so a pack that uses several needs one file per variant —
+`/magicnpcs loadout id <entity_type>` confirms an id resolves before you write the rest.
+
+Owner and faction protection are automatic: an Easy NPC never casts an attack spell at its owner, at a
+sibling NPC with the same owner, or at anything sharing its faction. That protection stays on even
+when `easynpc.enabled` is off.
+
+**Casting from a dialog or a trigger.** Add an Easy NPC action of type `CUSTOM` with the command:
+
+```
+magicnpcs:cast <spell_id> [level] [self|target]
+```
+
+for example `magicnpcs:cast irons_spellbooks:heal 2 self`. The namespace may be omitted
+(`magicnpcs:cast heal` means `irons_spellbooks:heal`). Without `self`, the cast is aimed at the NPC's
+current combat target, falling back to the player who triggered the action; an ally is never chosen.
+The same spell allow-list, mob-castability and mana rules apply as to an ordinary cast — a refused
+scripted cast is silent in game and explained in the log.
+
+**Gating a dialog on the NPC's magic.** Three conditions are available:
+`magicnpcs:has_school` (optionally with a school id as its custom data), `magicnpcs:can_cast`, and
+`magicnpcs:has_mana` (its value is the mana required). All three are answered server-side, so Easy NPC
+locks the option rather than showing it and failing.
+
+**Casting as an objective.** Magic NPCs registers the custom objective `magicnpcs:cast_spell`. It makes
+an NPC use whatever loadout or school it resolves to, at the objective's priority. Easy NPC has no UI
+for custom objectives, so it has to be applied through a preset or a command — a loadout or a School
+Tome assignment is the easier route and does the same thing.
 
 ### MCA Reborn — `mca:male` / `mca:female` (applies to ALL — see limitations)
 ```json

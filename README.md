@@ -647,7 +647,18 @@ that, these layers add mod-aware safety:
   player silently refused to fire while any other player stood near the line. Re-enable with
   `targeting.protectBystanderPlayers`; the caster's own target is never protected either way.
 
-Other NPC mods (**Guard Villagers, MCA Reborn, MineColonies, Easy NPC, Human
+**Easy NPC** is a first-class integration since 0.7.0, alongside Villager Recruits. Magic NPCs
+compiles against Easy NPC: Core and uses its own data, so an Easy NPC caster respects its **owner**
+and its **faction** (it never casts an attack spell at either), scales its mana with its **experience
+level**, and stays put when it is marked immovable or has been given a home position. Casting can be
+triggered from an Easy NPC **dialog or action** (`magicnpcs:cast <spell> [level] [self|target]`), and
+dialog options can be gated on `magicnpcs:has_school`, `magicnpcs:can_cast` and `magicnpcs:has_mana`.
+Turn it on with `easynpc.enabled` and `compat.easynpc`, both default **off**; see
+[`docs/loadouts/`](docs/loadouts/README.md) for the entity ids and examples. Owner and faction
+protection stay on even with the integration disabled — switching it off stops Easy NPCs casting, it
+never removes the rules about who they may not cast at.
+
+Other NPC mods (**Guard Villagers, MCA Reborn, MineColonies, Human
 Companions, More/Plus Villagers**) are supported via **config-gated datapack
 loadouts** — no hard dependency. Each has a toggle under `[compat]` in
 `config/magicnpcs-common.toml` (default **off**); enable it, then drop in a loadout for that mod's
@@ -739,7 +750,7 @@ In `config/magicnpcs-common.toml`:
 > **Upgrading from 0.5.0 or earlier:** `[compat]` and `general.debugLogging` used to live in the
 > per-world server file. Both locations are read for this release (a toggle is on if *either* file
 > enables it), so nothing resets — but move them to the common file; the server-side copies are
-> removed in 0.7.0. A one-time warning in the log names any key still in the old place.
+> removed in 0.8.0. A one-time warning in the log names any key still in the old place.
 
 ### Modpack authors: shipping config defaults
 

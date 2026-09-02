@@ -78,6 +78,17 @@ public final class RecruitsAdapter implements NpcAdapter {
         return true; // recruits are progression NPCs — eligible for the recruit school branch
     }
 
+    /** The {@code [schools.recruits]} settings, so the assignment code needs no Recruits special case. */
+    @Override
+    public SchoolRollPolicy schoolRollPolicy(Mob mob) {
+        return new SchoolRollPolicy(
+                MagicNpcsConfig.SCHOOLS_RECRUITS_ENABLED.get(),
+                MagicNpcsConfig.SCHOOLS_RECRUITS_CASTER_CHANCE.get(),
+                MagicNpcsConfig.SCHOOLS_RECRUITS_MIN_RANK.get(),
+                MagicNpcsConfig.SCHOOLS_RECRUITS_MODE.get(),
+                MagicNpcsConfig.SCHOOLS_RECRUITS_TYPE_SCHOOLS.get());
+    }
+
     @Override
     public boolean canCastAt(Mob caster, LivingEntity target) {
         return ((AbstractRecruitEntity) caster).shouldAttack(target);

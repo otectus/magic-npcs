@@ -3,6 +3,80 @@
 All notable changes to Magic NPCs are documented here. Versions follow
 `MAJOR.MINOR.PATCH`; this is a pre-1.0 line.
 
+## [0.7.0] — Easy NPC, properly
+
+Easy NPC "support" in 0.6.x was a name in a config array. `[compat].easynpc` existed, the loadout
+guide carried an example flagged *"verify; Easy NPC ids vary by variant"*, and there was no compile
+dependency, no adapter, and no test — an Easy NPC with a loadout cast like any anonymous mob, with no
+idea who owned it or what faction it was in. This release makes it a first-class integration on the
+same footing as Villager Recruits.
+
+Magic NPCs now compiles against **Easy NPC: Core 7.11.0** (MC 1.20.1 Forge) as a soft dependency, and
+everything below is inert unless that mod is installed. See
+[ADR 0010](docs/decisions/0010-easy-npc-integration.md) for the design and the rejected alternatives.
+
+### Added
+
+- **Easy NPC adapter.** Owner and faction awareness (an Easy NPC never casts an attack spell at its
+  owner, at a sibling NPC with the same owner, or at anything sharing its faction), mana scaled by the
+  NPC's Easy NPC experience level, casting suppressed while the NPC is paused, and movement that
+  honours an immovable flag or a home position.
+- **`magicnpcs:cast` action.** An Easy NPC action of type `CUSTOM` reading
+  `magicnpcs:cast <spell_id> [level] [self|target]`, so a dialog button or a trigger can make an NPC
+  cast. Applies the same spell allow-list, mob-castability and mana rules as an ordinary cast.
+- **Dialog conditions** `magicnpcs:has_school`, `magicnpcs:can_cast` and `magicnpcs:has_mana`, so a
+  dialog option can be offered only when the NPC can actually honour it.
+- **`magicnpcs:cast_spell` objective**, registered with Easy NPC's objective registry. Easy NPC has no
+  UI for custom objectives, so it is applied by preset or command; a loadout or a School Tome
+  assignment does the same thing more easily.
+- **`[easynpc]` config section** — `enabled` (default **false**), `manaPerLevel`, `useObjective`,
+  `respectFactions` — and **`[schools.easynpc]`** — `enabled` (default **false**), `casterChance`,
+  `assignmentMode`, `typeSchools`, `minLevelToCast`.
+- **`/magicnpcs why` reports Easy NPC state**: pause, owner, faction, experience level, navigation,
+  and whether the casting objective is present and registered. The startup line now names the detected
+  Easy NPC core and configuration-UI versions.
+- Verified Easy NPC entity ids in [`docs/loadouts/`](docs/loadouts/README.md), replacing the
+  unverified example.
+
+### Fixed
+
+- **A second progression mod was silently governed by the first one's config.** The school-assignment
+  branch was gated on the adapter's `schoolAssignable` alone and then read `[schools.recruits]`
+  directly, so any adapter answering that true was rolled under Villager Recruits' caster chance, rank
+  threshold and type map while its own section did nothing. Each adapter now publishes its own
+  `schoolRollPolicy`. No behaviour change for a Recruits-only install.
+
+### Changed
+
+- `"native_attack": "suppress"` and `"yield"` now recognise Easy NPC's attack goals
+  (`BowAttackGoal`, `CrossbowAttackGoal`, `GunAttackGoal`, `CustomMeleeAttackGoal`), so a "pure caster"
+  conversion works on an Easy NPC. Matching is by simple class name, as before.
+- Casts that no goal owns are driven to completion by a new server-tick driver. Without it a scripted
+  cast would charge its mana, start Iron's channel and hang, leaving the mob unable to cast again.
+
+### Migration
+
+- **Nothing changes for an existing pack.** `[easynpc].enabled` and `[schools.easynpc].enabled` both
+  default to off, and no Easy NPC loadouts ship in the jar.
+- Enabling Easy NPC casting needs **two** switches: `compat.easynpc` (admits loadouts on the
+  `easy_npc:` namespace) and `easynpc.enabled` (the adapter). This is deliberate — the first is about
+  which datapacks apply, the second about whether the mod's NPCs cast at all.
+- The Easy NPC dependency range is `[7.11,8.0)`. Easy NPC states its API may break in minor versions,
+  so the range says what has actually been checked rather than admitting everything below 8.0.
+- **The deprecated server-side `[compat]` block is *not* removed in this release**, despite 0.6.x
+  documenting 0.7.0 as its removal point. It is now scheduled for 0.8.0. This release is an
+  integration, and pairing it with a config migration would mean anyone who had not yet moved their
+  toggles silently lost them at the same moment their NPC behaviour changed — two unrelated causes for
+  one symptom. Both file locations are still read; a toggle is on if either enables it.
+
+### Known limitations
+
+- **Per-NPC configuration is still commands and datapacks.** Easy NPC's configuration UI cannot be
+  extended by another mod — `ConfigurationType` is a closed enum with no registration hook — so a
+  Magic NPCs tab is not possible. A standalone screen opened from the School Tome is planned for 0.8.0.
+- **Preset portability is untested.** Easy NPC presets serialize the whole entity, so a caster's stored
+  school *should* travel with its preset, but that round trip has not been verified and is not claimed.
+
 ## [0.6.3] — casters that know where to stand
 
 Follow-up to 0.6.2. Villager Recruits have cast spells since 0.4.0 and still do; what they could not
