@@ -61,6 +61,11 @@ sourceSets.main.resources {
 // both key off whether it is actually there.
 def recruitsJar = file("libs/recruits-${recruits_jar_version}.jar")
 
+// The CustomNPCs GBPort build is likewise not on any Maven, so it is dropped into libs/ by hand.
+// Same treatment as Recruits, plus a SHA-256 check: several rehosts publish jars under this exact
+// file name, and compiling against the wrong one fails at runtime rather than at build time.
+def customNpcsJar = file("libs/${customnpcs_jar_artifact}-${customnpcs_jar_version}.jar")
+
 repositories {
     mavenCentral()
     maven {
@@ -99,6 +104,14 @@ dependencies {
     if (recruitsJar.exists()) {
         compileOnly fg.deobf("blank:recruits:${recruits_jar_version}")
     }
+
+    // CustomNPCs is a soft dependency compiled against the local GBPort jar (libs/), never bundled.
+    // flatDir resolves 'blank:<name>:<version>' to libs/<name>-<version>.jar, which is why the
+    // artifact name is a property rather than a literal. Declared only when the file is present so a
+    // fresh clone gets the compileJava guard's explanation instead of an unresolved-dependency error.
+    if (customNpcsJar.exists()) {
+        compileOnly fg.deobf("blank:${customnpcs_jar_artifact}:${customnpcs_jar_version}")
+    }
     // Phase 7 dev-runtime (-PdevRuntime): load Iron's + its mandatory deps (GeckoLib/Curios/
     // PlayerAnimator) + Recruits at runtime so casting can actually run. runtimeOnly → never
     // shipped or committed; versions pinned to Iron's 3.15.x requirements. See docs/dev-runtime.md.
@@ -109,6 +122,12 @@ dependencies {
     // itself the "Easy NPC present, Iron's absent" case worth having a check for.
     if (project.hasProperty('easyNpcRuntime') && !project.hasProperty('devRuntime')) {
         runtimeOnly fg.deobf("curse.maven:${easy_npc_project}:${easy_npc_file}")
+    }
+    // CustomNPCs on its own (-PcustomNpcsRuntime), without the Iron's stack — same reasoning as
+    // -PeasyNpcRuntime: enough to prove the compat facade, the API-bus bridge and the AI repair hook
+    // classload and register against the real mod, with the casting hooks dormant.
+    if (project.hasProperty('customNpcsRuntime') && !project.hasProperty('devRuntime')) {
+        runtimeOnly fg.deobf("blank:${customnpcs_jar_artifact}:${customnpcs_jar_version}")
     }
     if (project.hasProperty('devRuntime')) {
         // Full Iron's runtime stack from local libs/ jars (the user's pack versions), so the
@@ -121,6 +140,7 @@ dependencies {
         runtimeOnly fg.deobf("blank:player-animation-lib-forge:1.0.2-rc1+1.20")     // libs/player-animation-lib-forge-*.jar
         runtimeOnly fg.deobf("blank:recruits:${recruits_jar_version}")              // libs/recruits-1.20.1-1.15.0.jar
         runtimeOnly fg.deobf("curse.maven:${easy_npc_project}:${easy_npc_file}")    // Easy NPC: Core
+        runtimeOnly fg.deobf("blank:${customnpcs_jar_artifact}:${customnpcs_jar_version}") // libs/CustomNPCs-*.jar
     }
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
@@ -236,6 +256,40 @@ Drop that exact file into libs/ (the version is pinned by 'recruits_jar_version'
 gradle.properties) and build again. Do NOT substitute a hand-written stub: the emitted call
 descriptors would silently disagree with the real mod at runtime.
 """.stripIndent())
+        }
+        if (!customNpcsJar.exists()) {
+            throw new GradleException("""
+Missing the CustomNPCs jar, which Magic NPCs compiles against (compileOnly - it is never bundled).
+This is the GBPort community build for 1.20.1; it is not published to any Maven repository, so it
+cannot be fetched automatically and it is not committed to this repository.
+
+  Expected: ${customNpcsJar}
+
+Drop that exact file into libs/ (the artifact name and version are pinned by
+'customnpcs_jar_artifact' / 'customnpcs_jar_version' in gradle.properties) and build again. Do NOT
+substitute a hand-written stub: the emitted call descriptors would silently disagree with the real
+mod at runtime.
+""".stripIndent())
+        }
+        // Several rehosts publish a jar with this exact file name. Compiling against the wrong one
+        // produces a build that only fails once a player loads a world, so check it here instead.
+        if (customnpcs_jar_sha256) {
+            def actual = java.security.MessageDigest.getInstance('SHA-256')
+                    .digest(customNpcsJar.bytes)
+                    .encodeHex().toString()
+            if (actual != customnpcs_jar_sha256) {
+                throw new GradleException("""
+The CustomNPCs jar in libs/ is not the build Magic NPCs is pinned to.
+
+  File:     ${customNpcsJar}
+  Expected: ${customnpcs_jar_sha256}
+  Actual:   ${actual}
+
+Either replace it with the pinned build, or - if you deliberately mean to compile against a
+different one - update 'customnpcs_jar_sha256' (and the version) in gradle.properties and re-check
+CustomNpcsCompat.SUPPORTED_VERSIONS, which is what decides at runtime whether the bridge activates.
+""".stripIndent())
+            }
         }
     }
 }

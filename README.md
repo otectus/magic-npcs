@@ -62,6 +62,8 @@ and what replaced it.
 | Curios API | (Iron's dep) | `5.4.7+` |
 | PlayerAnimator | (Iron's dep) | `1.0.2-rc1+` |
 | Villager Recruits | optional | `1.15.0+` (enables the recruit adapter) |
+| Easy NPC | optional | `7.11.0+` (soft dependency; enables the Easy NPC adapter) |
+| CustomNPCs | optional | `1.20.1.20260711` (soft dependency; enables the CustomNPCs adapter; other builds report `PRESENT_UNSUPPORTED` and disable integration) |
 
 Magic NPCs **does not bundle** Iron's or Recruits — install them yourself.
 
@@ -657,6 +659,22 @@ Turn it on with `easynpc.enabled` and `compat.easynpc`, both default **off**; se
 [`docs/loadouts/`](docs/loadouts/README.md) for the entity ids and examples. Owner and faction
 protection stay on even with the integration disabled — switching it off stops Easy NPCs casting, it
 never removes the rules about who they may not cast at.
+
+**CustomNPCs** is a first-class integration since 0.8.0. Magic NPCs compiles against CustomNPCs'
+public API, and a CustomNPC caster respects the authored configuration: its **faction**, **owner**,
+**role**, **job**, and **movement mode** all affect whether and where it casts. An NPC in a blocked
+job or role never casts; one marked stationary is pinned and does not reposition; one told to wander
+stays near its home. A script can react to casts via trigger events, read and mutate NPC state through
+the request/response mailbox, and veto casts before they start. Every authored
+NPC is opt-in by default — it must have an explicit loadout, a School Tome assignment, or match a
+`[schools.customnpcs]` config block to become a caster. This is deliberate: authored NPCs should not
+silently gain spells on install. Disable the integration with `customnpcs.bridgeEnabled = false` (in
+`config/magicnpcs-common.toml`) to stop all CustomNPC casting and repair, or use `compat.customnpcs = false`
+to block datapack loadouts while keeping the adapter active. See
+[`docs/customnpcs-authoring.md`](docs/customnpcs-authoring.md) for loadout targeting with trait conditions
+(`npc_traits`), the trait namespace (`customnpcs:job/<job>`, `role/`, `faction/`, etc.), and the script bridge;
+[`docs/customnpcs-development.md`](docs/customnpcs-development.md) for bridge design and testing. Owner and
+faction protection stay on even if the integration is disabled.
 
 Other NPC mods (**Guard Villagers, MCA Reborn, MineColonies, Human
 Companions, More/Plus Villagers**) are supported via **config-gated datapack

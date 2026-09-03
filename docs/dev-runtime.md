@@ -4,7 +4,7 @@ Iron's Spellbooks is declared **`compileOnly`** (we compile against it but never
 
 ## Required runtime companions
 
-Read from Iron's `mods.toml` for the version we target (file `7402504`, `1.20.1-3.15.x`):
+Read from Iron's `mods.toml` for the compile version we target (see `gradle.properties` for the exact version):
 
 | Mod | Required range | Cached locally? |
 |---|---|---|
@@ -16,20 +16,55 @@ Read from Iron's `mods.toml` for the version we target (file `7402504`, `1.20.1-
 
 > Because Curios and PlayerAnimator are not in the local Gradle cache, the in-game test **cannot be run fully offline** — it requires a one-time network fetch of those two jars.
 
-## Dev-runtime stack (`-PdevRuntime`) — resolved, wired & **running**
+## Dev-runtime profiles
+
+The full stack is loaded at runtime from local jars (runtimeOnly → never shipped/committed). Three profiles are available:
+
+### `-PeasyNpcRuntime` — Easy NPC only
+
+A lightweight check that Easy NPC's adapter and script surface classload correctly, without the full Iron's stack:
+
+```gradle
+if (project.hasProperty('easyNpcRuntime') && !project.hasProperty('devRuntime')) {
+    runtimeOnly fg.deobf("curse.maven:${easy_npc_project}:${easy_npc_file}")
+}
+```
+
+The casting hooks stay dormant (Iron's absent). Use it to verify Easy NPC integration without network dependency on Iron's runtime jars.
+
+### `-PcustomNpcsRuntime` — CustomNPCs only
+
+A lightweight check that CustomNPCs' adapter and script surface classload correctly:
+
+```gradle
+if (project.hasProperty('customNpcsRuntime') && !project.hasProperty('devRuntime')) {
+    runtimeOnly fg.deobf("blank:${customnpcs_jar_artifact}:${customnpcs_jar_version}")
+}
+```
+
+Requires the fixture jar in `libs/` (see above for staging). The casting hooks stay dormant. Use it to verify CustomNPCs integration.
+
+**Run it:**
+```
+./gradlew runGameTestServer -PcustomNpcsRuntime
+```
+
+### `-PdevRuntime` — Full stack
 
 `build.gradle` loads the full stack at runtime behind `-PdevRuntime` from local `libs/` jars
-(runtimeOnly → never shipped/committed; `forge_version` is `47.4.16`). The Iron's *runtime*
-jar is **3.16.1** (matching the target pack); the mod still **compiles** against 3.15.2:
+(runtimeOnly → never shipped/committed). The Iron's *runtime* jar version and the compile version
+are both defined in `gradle.properties`; check those for the exact versions used:
 
 ```gradle
 if (project.hasProperty('devRuntime')) {
-    runtimeOnly fg.deobf("blank:irons_spellbooks:${irons_spellbooks_runtime}") // libs/irons_spellbooks-1.20.1-3.16.1.jar
-    runtimeOnly fg.deobf("blank:irons_lib:1.20.1-1.1.0")                        // libs/irons_lib-*.jar (3.16.x split-out lib)
+    runtimeOnly fg.deobf("blank:irons_spellbooks:${irons_spellbooks_runtime}") // libs/irons_spellbooks-<version>.jar
+    runtimeOnly fg.deobf("blank:irons_lib:1.20.1-1.1.0")                        // libs/irons_lib-*.jar (Iron's 3.16.x split-out lib)
     runtimeOnly fg.deobf("blank:geckolib:4.8.3")                                // libs/geckolib-4.8.3.jar (Forge jar)
     runtimeOnly fg.deobf("maven.modrinth:curios:5.14.1+1.20.1")
     runtimeOnly fg.deobf("blank:player-animation-lib-forge:1.0.2-rc1+1.20")     // libs/player-animation-lib-forge-*.jar
     runtimeOnly fg.deobf("blank:recruits:${recruits_jar_version}")              // libs/recruits-1.20.1-1.15.0.jar
+    runtimeOnly fg.deobf("curse.maven:${easy_npc_project}:${easy_npc_file}")    // Easy NPC: Core
+    runtimeOnly fg.deobf("blank:${customnpcs_jar_artifact}:${customnpcs_jar_version}") // libs/CustomNPCs-*.jar
 }
 ```
 
@@ -54,8 +89,8 @@ path — fully offline:
 ```
 
 A headless gametest server launches and **loads the mod** — the boot log line
-`main … Magic NPCs … magicnpcs … 0.5.0 … DONE` (followed by "Started game test
-server") proves `mods.toml` is valid, the mod boots with its optional dependencies absent, and
+shows `magicnpcs` and the version from `gradle.properties` (followed by "Started game test
+server"), proving `mods.toml` is valid, the mod boots with its optional dependencies absent, and
 its targets are absent (plugin gate → skip), the config registers, and the
 "Iron's absent → disabled, no crash" path holds. (This is verified.)
 
@@ -112,18 +147,17 @@ server config loads (a dev-only hard error). Now guarded with `ForgeConfigSpec.i
 Everything must be in production/SRG space for Iron's mixins to work, so run the **built
 jar** in a real Forge 1.20.1 (47.4.0+) instance — the normal end-user flow:
 
-1. `./gradlew build` → `build/libs/magicnpcs-0.5.0.jar`.
-2. Into a Forge **47.4.16** client/server `mods/` folder, drop `magicnpcs-0.5.0.jar` + the
-   **production** jars for Iron's `1.20.1-3.15.x`, **GeckoLib 4.8.3 (forge)**, **Curios
-   5.14.1+1.20.1**, **PlayerAnimator 1.0.2-rc1+1.20**, and (optional) **Recruits 1.15.0**.
-   (`libs/geckolib-4.8.3.jar` and `libs/recruits-1.20.1-1.15.0.jar` are already the
-   production jars.)
+1. `./gradlew build` → `build/libs/magicnpcs-<version>.jar` (version from `gradle.properties`).
+2. Into a Forge **47.4.16** client/server `mods/` folder, drop `magicnpcs-<version>.jar` + the
+   **production** jars for Iron's (see `gradle.properties` for version), **GeckoLib 4.8.3 (forge)**, **Curios
+   5.14.1+1.20.1**, **PlayerAnimator 1.0.2-rc1+1.20**, and (optional) **Recruits** (see `gradle.properties` for version).
+   The jars at `libs/geckolib-4.8.3.jar` and `libs/recruits-*.jar` are the production jars.
 3. Run the **in-game test** above. For a headless check, set `debugLogging=true` in
    `config/magicnpcs-server.toml` and watch the log for `[cast]` lines + mana deltas.
 
 ## Status — DEV-RUNTIME CASTING NOW VERIFIED
 
-`./gradlew runGameTestServer -PdevRuntime` now boots with Iron's 3.16.1 + Recruits and runs
+`./gradlew runGameTestServer -PdevRuntime` now boots with Iron's (runtime version from `gradle.properties`) + Recruits and runs
 the casting GameTests for real (no longer skip-only). Results:
 
 - ✅ **All required tests pass**, including `skeletonCastsMagicMissile` — the universal

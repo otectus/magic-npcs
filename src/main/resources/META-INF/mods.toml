@@ -71,3 +71,15 @@ mandatory=false
 versionRange="[7.11,8.0)"
 ordering="AFTER"
 side="BOTH"
+
+# CustomNPCs — optional. Magic NPCs compiles against the noppes.npcs.api.* public API only, and the
+# bridge additionally refuses to activate unless the detected version is on
+# CustomNpcsCompat.SUPPORTED_VERSIONS. The range here is therefore deliberately broad: it exists to
+# order loading, while the actual "is this build supported" decision is made at runtime, where the
+# answer can be reported to the operator instead of stopping the game from starting.
+[[dependencies.magicnpcs]]
+modId="customnpcs"
+mandatory=false
+versionRange="[1.20.1,1.21)"
+ordering="AFTER"
+side="BOTH"

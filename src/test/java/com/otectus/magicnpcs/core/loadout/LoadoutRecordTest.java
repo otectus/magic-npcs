@@ -221,4 +221,60 @@ class LoadoutRecordTest {
         assertFalse(parse(base).loadout().contentHash().equals(parse(changed).loadout().contentHash()),
                 "a changed range must change the hash, or reconciliation would skip the update");
     }
+
+    @Test
+    void npcTraitsParseIntoTheThreeConditionSets() {
+        LoadoutRecord record = parse("""
+                {
+                  "entity_type": "minecraft:skeleton",
+                  "conditions": {
+                    "npc_traits": {
+                      "all_of": ["customnpcs:role/none"],
+                      "any_of": ["customnpcs:job/guard", "customnpcs:job/bard"],
+                      "none_of": ["customnpcs:job/farmer"]
+                    }
+                  },
+                  "spells": [ { "spell": "irons_spellbooks:magic_missile" } ]
+                }""");
+        assertEquals(LoadoutRecord.Status.ACTIVE, record.status());
+        LoadoutConditions conditions = record.loadout().conditions();
+        assertEquals(java.util.Set.of(new ResourceLocation("customnpcs", "role/none")),
+                conditions.traitsAllOf());
+        assertEquals(2, conditions.traitsAnyOf().size());
+        assertEquals(java.util.Set.of(new ResourceLocation("customnpcs", "job/farmer")),
+                conditions.traitsNoneOf());
+    }
+
+    @Test
+    void aMalformedTraitIsRejectedAndNamesItsOwnIndex() {
+        // The value of the report is the pointer: in a ten-entry list "one of these is wrong" is not
+        // actionable, so the element index is part of the contract.
+        LoadoutRecord record = parse("""
+                {
+                  "entity_type": "minecraft:skeleton",
+                  "conditions": {
+                    "npc_traits": { "any_of": ["customnpcs:job/guard", "Not An Id"] }
+                  },
+                  "spells": [ { "spell": "irons_spellbooks:magic_missile" } ]
+                }""");
+        assertEquals(LoadoutRecord.Status.REJECTED, record.status());
+        LoadoutProblem bad = problem(record, "BAD_NPC_TRAIT");
+        assertNotNull(bad);
+        assertEquals("/conditions/npc_traits/any_of/1", bad.pointer());
+    }
+
+    @Test
+    void omittedNpcTraitsAreNoConstraintAtAll() {
+        LoadoutRecord record = parse("""
+                {
+                  "entity_type": "minecraft:skeleton",
+                  "conditions": { "min_y": 0 },
+                  "spells": [ { "spell": "irons_spellbooks:magic_missile" } ]
+                }""");
+        assertEquals(LoadoutRecord.Status.ACTIVE, record.status());
+        LoadoutConditions conditions = record.loadout().conditions();
+        assertTrue(conditions.traitsAllOf().isEmpty());
+        assertTrue(conditions.traitsAnyOf().isEmpty());
+        assertTrue(conditions.traitsNoneOf().isEmpty());
+    }
 }

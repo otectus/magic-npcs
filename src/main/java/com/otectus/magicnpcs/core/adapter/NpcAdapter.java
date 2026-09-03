@@ -1,7 +1,14 @@
 package com.otectus.magicnpcs.core.adapter;
 
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.item.ItemStack;
+
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 
 /**
  * Per-NPC-mod hook consulted by the universal casting path, so mod-specific
@@ -113,6 +120,68 @@ public interface NpcAdapter {
 
     /** @return true if {@code other} is an ally that must not be caught in the line of fire. */
     default boolean isAlly(Mob caster, LivingEntity other) {
+        return false;
+    }
+
+    /**
+     * The NPC framework this adapter speaks for, e.g. {@code customnpcs:npc}, or empty when the
+     * adapter is generic (owner/team) and names no framework of its own. Diagnostics and script
+     * surfaces use it to say <em>which</em> mod is governing a mob without a class-name guess.
+     *
+     * <p>Default: empty.
+     */
+    default Optional<ResourceLocation> frameworkId() {
+        return Optional.empty();
+    }
+
+    /**
+     * The player who owns this NPC, when the backing mod has a live notion of ownership. Read from
+     * the mod every time rather than persisted: an owner that has been cleared in the other mod's UI
+     * must stop being an owner here in the same tick.
+     *
+     * <p>Default: empty — no ownership concept.
+     */
+    default Optional<UUID> ownerId(Mob mob) {
+        return Optional.empty();
+    }
+
+    /**
+     * Mod-specific facts about this NPC as namespaced ids — its role, its job, its faction, its AI
+     * modes. Exists so diagnostics and data-driven rules can describe an NPC's mod-side
+     * configuration without any of them importing that mod or learning its integer enums.
+     *
+     * <p>Default: the empty set.
+     */
+    default Set<ResourceLocation> traits(Mob mob) {
+        return Set.of();
+    }
+
+    /**
+     * Put {@code stack} in {@code hand} the way the backing mod wants it done. Some NPC mods hold
+     * their equipment in their own inventory object and copy it onto the entity, so a plain
+     * {@link Mob#setItemInHand} is overwritten on the next sync and the grant silently disappears.
+     *
+     * @return true if this adapter handled the placement; false — the default — to say it has no
+     *         opinion, and the caller should fall back to {@link Mob#setItemInHand}.
+     */
+    default boolean setHeldItem(Mob mob, InteractionHand hand, ItemStack stack) {
+        return false;
+    }
+
+    /**
+     * Tell this NPC's own mod that something happened to its casting — a cast about to start, one
+     * started, finished, cancelled, or a school change. The one way a signal reaches a framework:
+     * {@code core.caster.MagicNpcEvents} posts the Forge event and then calls this, so a leaf never
+     * listens on the Forge bus and a signal has exactly one emission path.
+     *
+     * <p>Called on the server thread, inside the casting path. An implementation that runs a script
+     * here is running it synchronously, and must guard against a script that casts back.
+     *
+     * @return true to request that the cast be vetoed. Honoured only for
+     *         {@link MagicNpcSignal#CAST_PRE}; the answer is ignored for every other signal, because
+     *         nothing after the transaction point can be un-spent. Default: no opinion.
+     */
+    default boolean publish(Mob mob, MagicNpcSignal signal) {
         return false;
     }
 

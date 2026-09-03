@@ -44,7 +44,11 @@ public final class LoadoutSchema {
     public static final Set<String> CONDITIONS_KEYS = Set.of(
             LoadoutJson.COND_DIMENSIONS, LoadoutJson.COND_BIOMES, LoadoutJson.COND_DIFFICULTIES,
             LoadoutJson.COND_TIME, LoadoutJson.COND_MIN_Y, LoadoutJson.COND_MAX_Y,
-            LoadoutJson.COND_REQUIRE_RAID, LoadoutJson.COND_REQUIRE_STORM, LoadoutJson.COND_MOON_PHASES);
+            LoadoutJson.COND_REQUIRE_RAID, LoadoutJson.COND_REQUIRE_STORM, LoadoutJson.COND_MOON_PHASES,
+            LoadoutJson.COND_NPC_TRAITS);
+
+    public static final Set<String> NPC_TRAITS_KEYS = Set.of(
+            LoadoutJson.TRAITS_ALL_OF, LoadoutJson.TRAITS_ANY_OF, LoadoutJson.TRAITS_NONE_OF);
 
     public static final Set<String> CONDITION_KEYS = Set.of(
             LoadoutJson.CON_SELF_HP_BELOW, LoadoutJson.CON_TARGET_HP_BELOW, LoadoutJson.CON_ENEMIES_WITHIN,

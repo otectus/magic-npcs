@@ -3,6 +3,42 @@
 All notable changes to Magic NPCs are documented here. Versions follow
 `MAJOR.MINOR.PATCH`; this is a pre-1.0 line.
 
+## [0.8.0] — CustomNPCs, first-class
+
+CustomNPCs is a hand-authored NPC mod: every NPC is placed, dressed, and scripted by a pack author. Unlike Recruits or Easy NPC — where a school caster is opt-in per-NPC through a command or item — authored NPCs should not silently gain spells on install. This release adds CustomNPCs as a first-class integration with respect for authored configuration and explicit opt-in: an NPC needs a datapack loadout, a School Tome assignment, or a match in `[schools.customnpcs]` before it casts.
+
+Magic NPCs now compiles against **CustomNPCs (GBPort Unofficial) 1.20.1.20260711**, the community port. The version is hard-gated: only the exact build listed in `CustomNpcsCompat.SUPPORTED_VERSIONS` is supported; other versions report `PRESENT_UNSUPPORTED` and disable integration entirely rather than silently misbehaving.
+
+### Added
+
+- **CustomNPCs adapter.** Respects authored configuration: faction (never casts at non-hostiles), owner (never casts at the owner), role, job, AI modes (retaliate/moving/navigation), and movement policy (stationary NPCs are pinned, wanderers stay near home, followers hold formation). A caster reads from the NPC's live data every call so changes in the CustomNPCs GUI take effect immediately.
+- **AI-rebuild repair.** CustomNPCs clears both goal selectors on a fixed cadence, deleting any goal another mod injected. Magic NPCs queues a reconcile through the existing reconcile system to re-install goals, so a caster never silently stops casting. The repair runs async from the CustomNPCs hook so the dependency graph stays clean.
+- **`npc_traits` loadout condition** — gate a loadout on an NPC's authored properties without hard-coding entity types. Trait ids cover role (`customnpcs:role/<name>`), job (`customnpcs:job/<name>`), faction (`customnpcs:faction/<id>`), retaliation AI mode (`customnpcs:retaliate/<mode>`), movement mode (`customnpcs:moving/<mode>`), and navigation type (`customnpcs:navigation/<type>`). Use `all_of` / `any_of` / `none_of` arrays like world conditions; the example loadout in `data/magicnpcs/spellcasters/customnpcs_example.json` ships disabled and ready to copy.
+- **Forge-bus events** — two new events on `MinecraftForge.EVENT_BUS`: `MagicNpcCastEvent` (Pre cancelable, Started, Completed, Cancelled with reasons) and `MagicNpcSchoolChangedEvent`. Both carry vanilla types only (no Iron's/CustomNPCs imports needed), so any mod can listen without soft-dep hell.
+- **Script bridge.** CustomNPCs scripts see a `MagicNPCs` global with read operations (state queries) and mutations (school assignment/clearing, forcing casts). Cast lifecycle events fire script triggers with positional arguments (signal name, spell, level, etc.); scripts veto a cast in the `cast_pre` event by writing the value `1` to temp data at `magicnpcs.cancel.v1`. A request/response mailbox in stored data lets scripts query and mutate NPC state without a trigger: write to `magicnpcs.request.v1.op` / `.seq` / `.arg.<name>` and read the result from `magicnpcs.result.v1.code` / `.message` / `.value` on the next update tick. Result codes distinguish every failure mode so a script gets a reason, not an exception.
+- **`/magicnpcs config` status line** for CustomNPCs showing the bridge status (`absent`, `present_unsupported`, `active_full`, etc.) and the detected version.
+- **`-PcustomNpcsRuntime` dev profile** to boot with CustomNPCs alone (lightweight isolation test) and **`-PdevRuntime` now includes CustomNPCs** (full AI-repair and script testing). Both require the fixture jar in `libs/` — see `docs/dev-runtime.md`.
+- New config keys with defaults under `[customnpcs]` (server) and `[customnpcs]` (common): repair enable, faction respect, dialog pause, blocked jobs/roles, script trigger id, mailbox/mutations/cancel-handshake switches. Schools under `[schools.customnpcs]` (disabled by default, matching Easy NPC and Recruits precedent).
+
+### Fixed
+
+- **Scripted-cast cooldown parity.** Detached casts (from scripts, dialogs, etc.) now check cooldowns the same way AI-selected casts do, so two paths cannot disagree about how long a spell rests. The gates are identical: mana check, spell allow-list, mob castability, cooldown, and Iron's pre-cast conditions.
+
+### Changed
+
+- **Adapter interface gained four default methods**: `frameworkId()` returns the adapter's namespace (e.g., `customnpcs:npc`), `ownerId()` reads the owner, `traits()` reports mod-specific facts as namespaced ids, and `setHeldItem()` lets a mod place items in inventory. Old adapters keep working; new adapters only implement what they need.
+- **New public-API boundary:** the adapter seam no longer knows about school-assignment rules. Each adapter publishes its own `SchoolRollPolicy` so progression mods do not get rolled under each other's configs.
+
+### Migration
+
+- **Nothing breaks for an existing pack.** `[customnpcs].bridgeEnabled` and `[customnpcs].scriptGlobalEnabled` both default on, but `compat.customnpcs` defaults **off** — datapack loadouts targeting `customnpcs:` entity types are inert unless you opt in (same conservative stance as other guard/NPC mods). Authored NPCs do not cast until they are given a loadout or a School Tome assignment.
+- The CustomNPCs dependency range is `[1.20.1,1.21)` but the actual support is narrower: only `1.20.1.20260711` activates. Other versions report `PRESENT_UNSUPPORTED` at startup and the bridge does not run. This is deliberate — CustomNPCs is a community port with no API stability promise, and silence at load time would be wrong.
+
+### Known limitations
+
+- **No dynamic trait discovery.** Traits are the NPC's authored properties (role, job, AI modes) as resource ids. Dynamically creating a CustomNPC with a job that is not in `CustomNpcsIds` will log a warning but the id will still be available in a condition (`customnpcs:job/unknown_123`). Updating to a CustomNPCs build with a new job means updating Magic NPCs to know its name.
+- **Recipes and creative tabs are not wired.** The School Tome can be obtained for CustomNPCs but has no UI integration with the CustomNPCs recipe editor. Future work.
+
 ## [0.7.0] — Easy NPC, properly
 
 Easy NPC "support" in 0.6.x was a name in a config array. `[compat].easynpc` existed, the loadout

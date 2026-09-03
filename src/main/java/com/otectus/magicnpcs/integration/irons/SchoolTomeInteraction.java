@@ -1,5 +1,6 @@
 package com.otectus.magicnpcs.integration.irons;
 
+import com.otectus.magicnpcs.api.event.MagicNpcSchoolChangedEvent;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import com.otectus.magicnpcs.core.SchoolAssignResult;
 import com.otectus.magicnpcs.core.SchoolData;
@@ -70,17 +71,22 @@ public final class SchoolTomeInteraction {
         }
     }
 
+    /** Every mutation this class makes was asked for by a player holding the Tome. */
+    private static final MagicNpcSchoolChangedEvent.ChangeSource TOME =
+            MagicNpcSchoolChangedEvent.ChangeSource.TOME;
+
     /** Sneak-click: advance to the next school with a usable pool, or clear once past the last. */
     private static void cycle(Player player, Mob mob, List<ResourceLocation> allowed) {
         ResourceLocation current = SchoolData.getSchool(mob);
         SchoolReroll.CycleOutcome outcome =
-                SchoolReroll.cycle(allowed, current, school -> IronsSpellcasterHandler.applySchool(mob, school));
+                SchoolReroll.cycle(allowed, current,
+                        school -> IronsSpellcasterHandler.applySchool(mob, school, TOME));
 
         if (outcome.assigned() != null) {
             say(player, mob, Component.literal(mob.getName().getString() + " → " + outcome.assigned())
                     .withStyle(ChatFormatting.AQUA), true);
         } else if (outcome.cleared()) {
-            IronsSpellcasterHandler.clearSchool(mob);
+            IronsSpellcasterHandler.clearSchool(mob, TOME);
             say(player, mob, Component.literal(mob.getName().getString() + " → no school (stopped casting)")
                     .withStyle(ChatFormatting.GRAY), true);
         } else {

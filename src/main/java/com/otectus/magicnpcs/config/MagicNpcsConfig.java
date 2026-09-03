@@ -90,6 +90,21 @@ public final class MagicNpcsConfig {
     public static final ForgeConfigSpec.BooleanValue EASYNPC_USE_OBJECTIVE;
     public static final ForgeConfigSpec.BooleanValue EASYNPC_RESPECT_FACTIONS;
 
+    // CustomNPCs. The two COMMON values are installation facts (is the bridge wired at all, may
+    // scripts reach it); everything else is per-world balance and lives in the SERVER spec.
+    public static final ForgeConfigSpec.BooleanValue CUSTOMNPCS_BRIDGE_ENABLED;
+    public static final ForgeConfigSpec.BooleanValue CUSTOMNPCS_SCRIPT_GLOBAL_ENABLED;
+    public static final ForgeConfigSpec.BooleanValue CUSTOMNPCS_REPAIR_AFTER_AI_REBUILD;
+    public static final ForgeConfigSpec.BooleanValue CUSTOMNPCS_RESPECT_FACTIONS;
+    public static final ForgeConfigSpec.BooleanValue CUSTOMNPCS_PAUSE_DURING_DIALOG;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> CUSTOMNPCS_BLOCKED_JOBS;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> CUSTOMNPCS_BLOCKED_ROLES;
+    public static final ForgeConfigSpec.BooleanValue CUSTOMNPCS_EMIT_SCRIPT_TRIGGERS;
+    public static final ForgeConfigSpec.IntValue CUSTOMNPCS_SCRIPT_TRIGGER_ID;
+    public static final ForgeConfigSpec.BooleanValue CUSTOMNPCS_SCRIPT_MAILBOX_ENABLED;
+    public static final ForgeConfigSpec.BooleanValue CUSTOMNPCS_SCRIPT_MUTATIONS_ENABLED;
+    public static final ForgeConfigSpec.BooleanValue CUSTOMNPCS_SCRIPT_CANCEL_HANDSHAKE_ENABLED;
+
     // Per-mod compat toggles for NPC mods we cannot compile against. They gate
     // whether datapack loadouts targeting that mod's entity-type namespace apply.
     // Conservative: default OFF, so a modpack author opts in deliberately.
@@ -123,6 +138,8 @@ public final class MagicNpcsConfig {
             {"minecolonies", "minecolonies", "MineColonies",
                     "Citizens are driven by colony AI; prefer enabling this only for raiders."},
             {"easy_npc", "easynpc", "Easy NPC", ""},
+            {"customnpcs", "customnpcs", "CustomNPCs",
+                    "Authored NPCs: enable only for packs that opt in; automatic schools are separate."},
             {"humancompanions", "humancompanions", "Human Companions", ""},
             {"morevillagers", "morevillagers", "More Villagers", ""},
             {"villagersplus", "villagersplus", "VillagersPlus", ""},
@@ -154,6 +171,12 @@ public final class MagicNpcsConfig {
     public static final ForgeConfigSpec.ConfigValue<String> SCHOOLS_EASYNPC_MODE;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SCHOOLS_EASYNPC_TYPE_SCHOOLS;
     public static final ForgeConfigSpec.IntValue SCHOOLS_EASYNPC_MIN_LEVEL;
+
+    public static final ForgeConfigSpec.BooleanValue SCHOOLS_CUSTOMNPCS_ENABLED;
+    public static final ForgeConfigSpec.DoubleValue SCHOOLS_CUSTOMNPCS_CASTER_CHANCE;
+    public static final ForgeConfigSpec.ConfigValue<String> SCHOOLS_CUSTOMNPCS_MODE;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SCHOOLS_CUSTOMNPCS_TYPE_SCHOOLS;
+    public static final ForgeConfigSpec.IntValue SCHOOLS_CUSTOMNPCS_MIN_LEVEL;
 
     public static final ForgeConfigSpec.BooleanValue SCHOOLS_VILLAGERS_ENABLED;
     public static final ForgeConfigSpec.DoubleValue SCHOOLS_VILLAGERS_CASTER_CHANCE;
@@ -246,7 +269,7 @@ public final class MagicNpcsConfig {
         LEGACY_DEBUG_LOGGING = b
                 .comment("DEPRECATED — moved to config/magicnpcs-common.toml as of 0.6.0.",
                         "Still read for one release: if either file sets it true, debug logging is on.",
-                        "This copy is removed in 0.8.0.")
+                        "This copy will be removed in a future release.")
                 .translation(TKEY + "debugLogging")
                 .define("debugLogging", false);
         b.pop();
@@ -494,6 +517,68 @@ public final class MagicNpcsConfig {
                 .define("respectFactions", true);
         b.pop();
 
+        b.push("customnpcs");
+        b.comment("CustomNPCs integration. Separate from [compat].customnpcs, which only decides whether",
+                "datapack loadouts naming a 'customnpcs:' entity type apply at all; these govern the bridge.",
+                "A CustomNPCs NPC is hand-authored down to its dialog and its job, so the defaults here are",
+                "about not overriding the author: an NPC in conversation does not open fire, and the jobs whose",
+                "whole point is that the NPC does not act on its own are excluded outright.");
+        CUSTOMNPCS_REPAIR_AFTER_AI_REBUILD = b
+                .comment("Re-install Magic NPCs' casting goals after CustomNPCs rebuilds an NPC's AI.",
+                        "CustomNPCs clears both goal selectors on a fixed cadence, which deletes any goal another",
+                        "mod injected. With this off, a CustomNPC keeps its school and its mana but silently stops",
+                        "casting the first time its AI is rebuilt.")
+                .translation(TKEY + "customnpcs.repairAfterAiRebuild")
+                .define("repairAfterAiRebuild", true);
+        CUSTOMNPCS_RESPECT_FACTIONS = b
+                .comment("Route target selection through CustomNPCs' own faction rules, so an NPC never casts at",
+                        "something its faction is not hostile to. Turn off only if you want CustomNPCs to use the",
+                        "generic owner/team rules alone.")
+                .translation(TKEY + "customnpcs.respectFactions")
+                .define("respectFactions", true);
+        CUSTOMNPCS_PAUSE_DURING_DIALOG = b
+                .comment("Suppress casting while an NPC has a dialog open with a player. An authored conversation",
+                        "that the NPC interrupts to throw a fireball is not a conversation.")
+                .translation(TKEY + "customnpcs.pauseDuringDialog")
+                .define("pauseDuringDialog", true);
+        CUSTOMNPCS_BLOCKED_JOBS = b
+                .comment("CustomNPCs job names whose NPCs never cast, lower-case (e.g. 'puppet', 'builder').",
+                        "The defaults are the two jobs that exist to make an NPC a prop driven by something else:",
+                        "giving either of them combat behaviour of its own breaks whatever is driving it.")
+                .translation(TKEY + "customnpcs.blockedJobs")
+                .defineListAllowEmpty("blockedJobs", () -> List.of("puppet", "builder"),
+                        MagicNpcsConfig::isLowerCaseName);
+        CUSTOMNPCS_BLOCKED_ROLES = b
+                .comment("CustomNPCs role names whose NPCs never cast, lower-case (e.g. 'trader', 'bank').",
+                        "Empty by default: a role says what an NPC offers a player, not how it fights.")
+                .translation(TKEY + "customnpcs.blockedRoles")
+                .defineListAllowEmpty("blockedRoles", () -> List.<String>of(),
+                        MagicNpcsConfig::isLowerCaseName);
+        CUSTOMNPCS_EMIT_SCRIPT_TRIGGERS = b
+                .comment("Fire a CustomNPCs script trigger when a Magic NPCs cast starts, finishes or is cancelled,",
+                        "so an authored NPC's script can react to its own spellcasting.")
+                .translation(TKEY + "customnpcs.emitScriptTriggers")
+                .define("emitScriptTriggers", true);
+        CUSTOMNPCS_SCRIPT_TRIGGER_ID = b
+                .comment("The CustomNPCs custom-trigger id Magic NPCs emits on. Change it only if another add-on",
+                        "in the pack already uses this number - trigger ids are a single global space.")
+                .translation(TKEY + "customnpcs.scriptTriggerId")
+                .defineInRange("scriptTriggerId", 8800, 1, Integer.MAX_VALUE);
+        CUSTOMNPCS_SCRIPT_MAILBOX_ENABLED = b
+                .comment("Let scripts read Magic NPCs state for an NPC through the shared script mailbox.")
+                .translation(TKEY + "customnpcs.scriptMailboxEnabled")
+                .define("scriptMailboxEnabled", true);
+        CUSTOMNPCS_SCRIPT_MUTATIONS_ENABLED = b
+                .comment("Let scripts change an NPC's Magic NPCs state (assign a school, clear it, force a cast).",
+                        "Turn off to make the bridge read-only for scripts.")
+                .translation(TKEY + "customnpcs.scriptMutationsEnabled")
+                .define("scriptMutationsEnabled", true);
+        CUSTOMNPCS_SCRIPT_CANCEL_HANDSHAKE_ENABLED = b
+                .comment("Let a script veto a cast that is about to start, by answering the cast-start trigger.")
+                .translation(TKEY + "customnpcs.scriptCancelHandshakeEnabled")
+                .define("scriptCancelHandshakeEnabled", true);
+        b.pop();
+
         b.push("builtinLoadouts");
         b.comment("Per-loadout switches for the spellcaster loadouts Magic NPCs itself ships.",
                 "Each shipped loadout targets an OPTIONAL NPC mod and is already inert when that mod is",
@@ -505,7 +590,7 @@ public final class MagicNpcsConfig {
         b.push("compat");
         b.comment("DEPRECATED as of 0.6.0 — these moved to config/magicnpcs-common.toml, which applies to",
                 "every world instead of being per-save. They are still read for one release: a toggle is on",
-                "if EITHER file enables it. This block is removed in 0.8.0.");
+                "if EITHER file enables it. This block will be removed in a future release.");
         LEGACY_NAMESPACE_TOGGLES = defineCompatToggles(b, true);
         b.pop();
 
@@ -637,6 +722,32 @@ public final class MagicNpcsConfig {
                 .defineInRange("minLevelToCast", 0, 0, 100);
         b.pop();
 
+        b.push("customnpcs");
+        SCHOOLS_CUSTOMNPCS_ENABLED = b
+                .comment("Assign schools to CustomNPCs NPCs automatically.",
+                        "Off by default, for the same reason as Easy NPC: every CustomNPC is placed and dressed by",
+                        "hand, and an authored character does not expect to roll a random school.")
+                .translation(TKEY + "schools.customnpcs.enabled")
+                .define("enabled", false);
+        SCHOOLS_CUSTOMNPCS_CASTER_CHANCE = b
+                .comment("Chance [0..1] a spawned CustomNPC becomes a school caster (rolled once, persisted).")
+                .translation(TKEY + "schools.customnpcs.casterChance")
+                .defineInRange("casterChance", 0.25D, 0.0D, 1.0D);
+        SCHOOLS_CUSTOMNPCS_MODE = b
+                .comment("School assignment: RANDOM (from allowedSchools), BY_TYPE (typeSchools map), BY_RANK.")
+                .translation(TKEY + "schools.customnpcs.assignmentMode")
+                .define("assignmentMode", "RANDOM", MagicNpcsConfig::isAssignmentMode);
+        SCHOOLS_CUSTOMNPCS_TYPE_SCHOOLS = b
+                .comment("BY_TYPE map: 'entityType=school[,school]', e.g. 'customnpcs:customnpc=irons_spellbooks:fire'.")
+                .translation(TKEY + "schools.customnpcs.typeSchools")
+                .defineListAllowEmpty("typeSchools", () -> List.<String>of(), MagicNpcsConfig::isPairMapping);
+        SCHOOLS_CUSTOMNPCS_MIN_LEVEL = b
+                .comment("Minimum level to be eligible for a school. CustomNPCs has no progression of its own, so",
+                        "every NPC reports level 0 and anything above 0 makes none of them eligible.")
+                .translation(TKEY + "schools.customnpcs.minLevelToCast")
+                .defineInRange("minLevelToCast", 0, 0, 100);
+        b.pop();
+
         b.push("villagers");
         SCHOOLS_VILLAGERS_ENABLED = b
                 .comment("Assign schools to villagers (vanilla + profession mods extending Villager).",
@@ -708,6 +819,20 @@ public final class MagicNpcsConfig {
                 "Conservative: default OFF. Enabling a toggle with the mod absent simply has no effect.",
                 "Magic NPCs logs a warning at load time if a mod is installed while its toggle is off.");
         NAMESPACE_TOGGLES = defineCompatToggles(c, false);
+        c.pop();
+        c.push("customnpcs");
+        c.comment("Installation-level switches for the CustomNPCs bridge. Whether the bridge exists at all is a",
+                "property of the install, not of one world, so these live here rather than in the server config.");
+        CUSTOMNPCS_BRIDGE_ENABLED = c
+                .comment("Master switch for the CustomNPCs bridge. With this off Magic NPCs ignores CustomNPCs",
+                        "entirely: no adapter, no AI repair, no script surface - as if the mod were not installed.")
+                .translation(TKEY + "customnpcs.bridgeEnabled")
+                .define("bridgeEnabled", true);
+        CUSTOMNPCS_SCRIPT_GLOBAL_ENABLED = c
+                .comment("Expose the Magic NPCs script surface to CustomNPCs scripts at all. The per-feature",
+                        "switches in the server config are only consulted when this is on.")
+                .translation(TKEY + "customnpcs.scriptGlobalEnabled")
+                .define("scriptGlobalEnabled", true);
         c.pop();
         COMMON_SPEC = c.build();
     }
@@ -790,6 +915,72 @@ public final class MagicNpcsConfig {
         return SPEC.isLoaded() ? RECONCILE_BATCH_SIZE.get() : 200;
     }
 
+    // --- CustomNPCs ---------------------------------------------------------------------------
+    //
+    // Read through accessors rather than the raw values because the callers are another mod's event
+    // handlers: they can fire before either spec is loaded (CustomNPCs constructs NPCs during world
+    // load), and a config value read before its spec loads throws. Each answers the default instead.
+
+    /** @return whether the CustomNPCs bridge is wired at all. Safe before the spec loads. */
+    public static boolean customNpcsBridgeEnabled() {
+        return !COMMON_SPEC.isLoaded() || CUSTOMNPCS_BRIDGE_ENABLED.get();
+    }
+
+    /** @return whether the script surface is exposed to CustomNPCs scripts. Safe before load. */
+    public static boolean customNpcsScriptGlobalEnabled() {
+        return !COMMON_SPEC.isLoaded() || CUSTOMNPCS_SCRIPT_GLOBAL_ENABLED.get();
+    }
+
+    /** @return whether casting goals are re-installed after a CustomNPCs AI rebuild. Safe before load. */
+    public static boolean customNpcsRepairAfterAiRebuild() {
+        return !SPEC.isLoaded() || CUSTOMNPCS_REPAIR_AFTER_AI_REBUILD.get();
+    }
+
+    /** @return whether CustomNPCs faction rules gate target selection. Safe before load. */
+    public static boolean customNpcsRespectFactions() {
+        return !SPEC.isLoaded() || CUSTOMNPCS_RESPECT_FACTIONS.get();
+    }
+
+    /** @return whether an NPC in dialog is barred from casting. Safe before load. */
+    public static boolean customNpcsPauseDuringDialog() {
+        return !SPEC.isLoaded() || CUSTOMNPCS_PAUSE_DURING_DIALOG.get();
+    }
+
+    /** @return the CustomNPCs job names barred from casting. Safe before load. */
+    public static List<? extends String> customNpcsBlockedJobs() {
+        return SPEC.isLoaded() ? CUSTOMNPCS_BLOCKED_JOBS.get() : List.of("puppet", "builder");
+    }
+
+    /** @return the CustomNPCs role names barred from casting. Safe before load. */
+    public static List<? extends String> customNpcsBlockedRoles() {
+        return SPEC.isLoaded() ? CUSTOMNPCS_BLOCKED_ROLES.get() : List.<String>of();
+    }
+
+    /** @return whether cast lifecycle events are published as CustomNPCs script triggers. Safe before load. */
+    public static boolean customNpcsEmitScriptTriggers() {
+        return !SPEC.isLoaded() || CUSTOMNPCS_EMIT_SCRIPT_TRIGGERS.get();
+    }
+
+    /** @return the CustomNPCs custom-trigger id Magic NPCs emits on. Safe before load. */
+    public static int customNpcsScriptTriggerId() {
+        return SPEC.isLoaded() ? CUSTOMNPCS_SCRIPT_TRIGGER_ID.get() : 8800;
+    }
+
+    /** @return whether scripts may read Magic NPCs state through the mailbox. Safe before load. */
+    public static boolean customNpcsScriptMailboxEnabled() {
+        return !SPEC.isLoaded() || CUSTOMNPCS_SCRIPT_MAILBOX_ENABLED.get();
+    }
+
+    /** @return whether scripts may change Magic NPCs state. Safe before load. */
+    public static boolean customNpcsScriptMutationsEnabled() {
+        return !SPEC.isLoaded() || CUSTOMNPCS_SCRIPT_MUTATIONS_ENABLED.get();
+    }
+
+    /** @return whether a script may veto a cast about to start. Safe before load. */
+    public static boolean customNpcsScriptCancelHandshakeEnabled() {
+        return !SPEC.isLoaded() || CUSTOMNPCS_SCRIPT_CANCEL_HANDSHAKE_ENABLED.get();
+    }
+
     /** @return whether spells with no verified mob-cast strategy may be cast. Safe before load. */
     public static boolean allowUnverifiedSpells() {
         return SPEC.isLoaded() && ALLOW_UNVERIFIED_SPELLS.get();
@@ -844,7 +1035,7 @@ public final class MagicNpcsConfig {
             com.otectus.magicnpcs.MagicNpcs.LOGGER.warn(
                     "magicnpcs-server.toml still sets {} in the deprecated location(s) [{}]. They are honoured "
                             + "for this release, but move them to config/magicnpcs-common.toml — the server-side "
-                            + "copies are removed in 0.8.0.",
+                            + "copies will be removed in a future release.",
                     stale.size(), String.join(", ", stale));
         }
     }
@@ -963,6 +1154,16 @@ public final class MagicNpcsConfig {
     private static boolean isWeightingMode(Object o) {
         return o instanceof String s
                 && (s.equalsIgnoreCase("UNIFORM") || s.equalsIgnoreCase("INVERSE_RARITY"));
+    }
+
+    /** A bare lower-case identifier, as CustomNPCs role and job names are written in the config. */
+    private static boolean isLowerCaseName(Object o) {
+        if (!(o instanceof String s) || s.isEmpty()) return false;
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if ((ch < 'a' || ch > 'z') && ch != '_') return false;
+        }
+        return true;
     }
 
     private static boolean isAssignmentMode(Object o) {

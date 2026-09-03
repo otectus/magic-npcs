@@ -24,6 +24,10 @@ public enum ReconcileReason {
     EASY_NPC_OBJECTIVE,
     /** An Easy NPC changed state, so a state-gated decision may now go the other way. */
     EASY_NPC_STATE,
+    /** A CustomNPCs NPC finished initialising, so its goals exist for the first time. */
+    CUSTOMNPCS_INIT,
+    /** CustomNPCs rebuilt an NPC's AI, wiping every goal Magic NPCs had injected. */
+    CUSTOMNPCS_AI_REBUILD,
     /** A GameTest drove it directly. */
     TEST
 }

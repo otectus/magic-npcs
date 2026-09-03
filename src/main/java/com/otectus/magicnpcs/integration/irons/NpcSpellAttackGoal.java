@@ -1,10 +1,12 @@
 package com.otectus.magicnpcs.integration.irons;
 
 import com.otectus.magicnpcs.MagicNpcs;
+import com.otectus.magicnpcs.api.event.MagicNpcCastEvent;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import com.otectus.magicnpcs.core.SchoolData;
 import com.otectus.magicnpcs.core.adapter.NpcAdapter;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
+import com.otectus.magicnpcs.core.caster.MagicNpcEvents;
 import com.otectus.magicnpcs.core.caster.ManagedCasterState;
 import com.otectus.magicnpcs.core.feedback.Telegraphs;
 import com.otectus.magicnpcs.core.loadout.CastCondition;
@@ -350,6 +352,33 @@ public class NpcSpellAttackGoal extends Goal {
      */
     private void beginCast() {
         boolean wasOutOfCombat = target == null;
+        // Last look before anything is spent. The wind-up is real time: a dialog can have opened, an
+        // owner can have been assigned, a faction can have turned friendly since the decision was
+        // taken. Re-resolving here rather than reusing the cached adapter costs one lookup per cast
+        // and is the difference between aborting and firing at someone we now call an ally.
+        NpcAdapter live = NpcAdapters.resolve(mob);
+        boolean stateAllows = wasOutOfCombat ? live.canSupportCastNow(mob) : live.canCastNow(mob);
+        if (!stateAllows || (target != null && !live.canCastAt(mob, target))) {
+            if (MagicNpcsConfig.debugLogging()) {
+                MagicNpcs.LOGGER.info("[cast] {} abandoned {} at commit: {}",
+                        EntityType.getKey(mob.getType()), chosen.entry().spell(),
+                        MobCastSession.CancelReason.ADAPTER_REFUSED.description());
+            }
+            // No mana, no cooldown — the cast never started. Space the next decision so an NPC held
+            // in dialog does not re-telegraph on every tick.
+            scheduleNextDecision(wasOutOfCombat ? idleInterval() : combatInterval());
+            endAttempt();
+            return;
+        }
+        // Announce the cast while it is still free to abort. A Forge listener or an NPC script may
+        // veto here; the abort path below is the existing no-mana, no-cooldown one, so a vetoed cast
+        // costs the caster exactly nothing.
+        if (!MagicNpcEvents.postCastPre(mob, chosen.entry().spell(), effectiveLevel(chosen), target,
+                MagicNpcCastEvent.CastSource.AI)) {
+            scheduleNextDecision(wasOutOfCombat ? idleInterval() : combatInterval());
+            endAttempt();
+            return;
+        }
         if (chosen.entry().role() == LoadoutEntry.Role.ATTACK && target != null) {
             // LookControl only applies its rotation later in the tick (after the goal runs), so a
             // setLookAt here is stale at cast time — Iron's projectile spells read getLookAngle()
@@ -360,12 +389,17 @@ public class NpcSpellAttackGoal extends Goal {
         MobCastSession.Start start =
                 MobCastSession.begin(mob, target, chosen.spell(), effectiveLevel(chosen));
         if (!start.started()) {
+            MagicNpcEvents.postFailed(mob, chosen.entry().spell(), effectiveLevel(chosen), target,
+                    MagicNpcCastEvent.CastSource.AI, start.refusal() == null
+                            ? String.valueOf(start.detail()) : start.refusal().description());
             // Space the next decision regardless, so a spell that keeps refusing doesn't spam.
             scheduleNextDecision(wasOutOfCombat ? idleInterval() : combatInterval());
             endAttempt();
             return;
         }
         session = start.session();
+        MagicNpcEvents.postStarted(mob, chosen.entry().spell(), effectiveLevel(chosen), target,
+                MagicNpcCastEvent.CastSource.AI);
         mob.swing(InteractionHand.MAIN_HAND);
         // Cooldown starts with the cast, not with its completion: a channel that is interrupted must
         // not be immediately retryable, or an ATTACK caster whose target keeps ducking behind cover
@@ -680,13 +714,37 @@ public class NpcSpellAttackGoal extends Goal {
 
     /** Precedence: explicit per-spell ticks > per-spell multiplier > global multiplier; always floored. */
     private int resolveCooldown(Resolved r) {
-        LoadoutEntry e = r.entry();
+        return resolveCooldown(r.entry(), r.spell());
+    }
+
+    private static int resolveCooldown(LoadoutEntry e, AbstractSpell spell) {
         return CooldownResolver.resolve(
-                e.cooldownTicks(),
-                e.cooldownMultiplier(),
+                e == null ? null : e.cooldownTicks(),
+                e == null ? null : e.cooldownMultiplier(),
                 MagicNpcsConfig.COOLDOWN_MULTIPLIER.get(),
-                r.spell().getSpellCooldown(),
+                spell.getSpellCooldown(),
                 MagicNpcsConfig.MIN_COOLDOWN_TICKS.get());
+    }
+
+    /**
+     * @return the cooldown, in ticks, this caster takes for {@code spell} — the loadout entry's
+     *         overrides when {@code mob}'s installed loadout contains the spell, the global rules
+     *         otherwise.
+     *
+     *         <p>Shared with {@link DetachedCastDriver} so a scripted cast and a chosen cast start
+     *         the same cooldown. The driver used to start none at all, which let a script recast the
+     *         same spell every tick.
+     */
+    static int cooldownFor(Mob mob, ResourceLocation spellId, AbstractSpell spell) {
+        NpcSpellAttackGoal goal = CasterReconciler.findSpellGoal(mob);
+        if (goal != null) {
+            for (Resolved r : goal.spells) {
+                if (r.entry().spell().equals(spellId)) {
+                    return resolveCooldown(r.entry(), r.spell());
+                }
+            }
+        }
+        return resolveCooldown(null, spell);
     }
 
     /**

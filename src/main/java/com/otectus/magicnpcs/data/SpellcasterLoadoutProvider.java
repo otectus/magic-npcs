@@ -2,8 +2,11 @@ package com.otectus.magicnpcs.data;
 
 import com.google.gson.JsonObject;
 import com.otectus.magicnpcs.MagicNpcs;
+import com.otectus.magicnpcs.core.loadout.LoadoutConditions;
 import com.otectus.magicnpcs.core.loadout.LoadoutEntry;
 import com.otectus.magicnpcs.core.loadout.LoadoutJson;
+import com.otectus.magicnpcs.core.loadout.LoadoutSourceTier;
+import com.otectus.magicnpcs.core.loadout.NativeAttackPolicy;
 import com.otectus.magicnpcs.core.loadout.SpellcasterLoadout;
 import net.minecraft.data.CachedOutput;
 import net.minecraft.data.DataProvider;
@@ -14,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -24,6 +28,14 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class SpellcasterLoadoutProvider implements DataProvider {
     private static final String IRONS = "irons_spellbooks";
+    private static final String CUSTOMNPCS = "customnpcs";
+
+    /** File name → {@code _comment} written into the generated JSON, for loadouts that need explaining. */
+    private static final Map<String, String> COMMENTS = Map.of(
+            "customnpcs_example",
+            "Example: disabled by default. Copy this file into a datapack, set \"enabled\": true, and "
+                    + "edit npc_traits to match your NPCs. Trait ids come from the NPC's own mod — "
+                    + "customnpcs:job/<job>, customnpcs:role/<role>, customnpcs:faction/<id>.");
 
     private final PackOutput.PathProvider path;
 
@@ -36,6 +48,10 @@ public final class SpellcasterLoadoutProvider implements DataProvider {
         List<CompletableFuture<?>> futures = new ArrayList<>();
         loadouts().forEach((name, loadout) -> {
             JsonObject json = LoadoutJson.toJson(loadout);
+            String comment = COMMENTS.get(name);
+            if (comment != null) {
+                json.addProperty("_comment", comment);
+            }
             futures.add(DataProvider.saveStable(cache, json, path.json(new ResourceLocation(MagicNpcs.MODID, name))));
         });
         return CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
@@ -70,7 +86,23 @@ public final class SpellcasterLoadoutProvider implements DataProvider {
                 attack(irons("magic_missile"), 1, 3, 0.0, 18.0, 1.0),
                 attack(irons("guiding_bolt"), 1, 2, 4.0, 22.0, 1.0),
                 support(irons("heal"), 1, 1))));
+        // Shipped switched off: CustomNPCs NPCs are hand-built by the pack author, so an active
+        // default would hand spells to every guard-job NPC in an existing world without being asked.
+        // It is here to be copied and to document the npc_traits gate against a real trait id.
+        out.put("customnpcs_example", new SpellcasterLoadout(
+                new ResourceLocation(CUSTOMNPCS, "customnpc"), null, 110, 9, List.of(
+                        attack(irons("magic_missile"), 1, 3, 0.0, 18.0, 1.0),
+                        attack(irons("guiding_bolt"), 1, 2, 4.0, 22.0, 1.0),
+                        support(irons("heal"), 1, 1)),
+                null, guardJobOnly(), 1, null, false, false, LoadoutSourceTier.DATAPACK, null,
+                NativeAttackPolicy.COEXIST));
         return out;
+    }
+
+    /** The one condition the example exists to show: "only NPCs whose CustomNPCs job is guard". */
+    private static LoadoutConditions guardJobOnly() {
+        return new LoadoutConditions(null, null, null, null, null, null, null, null, null,
+                Set.of(), Set.of(new ResourceLocation(CUSTOMNPCS, "job/guard")), Set.of());
     }
 
     private static LoadoutEntry attack(ResourceLocation spell, int level, int weight, double min, double max, double safety) {

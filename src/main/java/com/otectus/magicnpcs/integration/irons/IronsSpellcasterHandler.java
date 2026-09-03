@@ -2,6 +2,7 @@ package com.otectus.magicnpcs.integration.irons;
 
 import com.otectus.magicnpcs.MagicNpcs;
 import com.otectus.magicnpcs.command.MagicNpcsCommands;
+import com.otectus.magicnpcs.api.event.MagicNpcSchoolChangedEvent;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import com.otectus.magicnpcs.core.SchoolAssignResult;
 import com.otectus.magicnpcs.core.SchoolData;
@@ -84,6 +85,16 @@ public class IronsSpellcasterHandler {
      * reported when it finishes.
      */
     private static final Deque<QueuedReconcile> PENDING = new ArrayDeque<>();
+
+    /**
+     * The entity ids currently sitting in {@link #PENDING}, so a repeated request for the same mob
+     * collapses into one reconcile.
+     *
+     * <p>Needed because {@link #requestReconcile} is driven by another mod's events: CustomNPCs
+     * rebuilds an NPC's AI on a fixed cadence and can ask for the same mob many times before the
+     * queue is next drained, and a deque has no membership test of its own.
+     */
+    private static final java.util.Set<UUID> PENDING_IDS = new java.util.HashSet<>();
     private static int pendingInstalled;
     private static int pendingRemoved;
     private static int pendingFailed;
@@ -124,6 +135,7 @@ public class IronsSpellcasterHandler {
             return;
         }
         PENDING.clear();
+        PENDING_IDS.clear();
         pendingInstalled = 0;
         pendingRemoved = 0;
         pendingFailed = 0;
@@ -133,6 +145,7 @@ public class IronsSpellcasterHandler {
             for (Entity entity : level.getAllEntities()) {
                 if (entity instanceof Mob mob) {
                     PENDING.add(new QueuedReconcile(level, mob.getUUID(), reason));
+                    PENDING_IDS.add(mob.getUUID());
                     queued++;
                 }
             }
@@ -157,6 +170,7 @@ public class IronsSpellcasterHandler {
         int budget = MagicNpcsConfig.reconcileBatchSize();
         while (budget-- > 0 && !PENDING.isEmpty()) {
             QueuedReconcile queued = PENDING.poll();
+            PENDING_IDS.remove(queued.entityId());
             Mob mob;
             try {
                 // A queued entry outlives the tick it was made on, so its level may have unloaded and
@@ -190,6 +204,23 @@ public class IronsSpellcasterHandler {
             pendingInstalled = 0;
             pendingRemoved = 0;
             pendingFailed = 0;
+        }
+    }
+
+    /**
+     * Ask for {@code mob} to be reconciled on a later server tick.
+     *
+     * <p>The one entry point for compat code that has noticed something outside Magic NPCs disturbed
+     * a caster. It only enqueues — no goal-selector access, no reconcile — so it is safe to call from
+     * inside another mod's event handler, where mutating the AI would be a concurrent modification of
+     * the very selector that mod is iterating. Requests for a mob already queued are dropped.
+     */
+    public static void requestReconcile(Mob mob, ReconcileReason reason) {
+        if (mob == null || !(mob.level() instanceof ServerLevel level)) {
+            return;
+        }
+        if (PENDING_IDS.add(mob.getUUID())) {
+            PENDING.add(new QueuedReconcile(level, mob.getUUID(), reason));
         }
     }
 
@@ -230,6 +261,15 @@ public class IronsSpellcasterHandler {
      *         unknown, disallowed, or simply empty under the current caps (W4)
      */
     public static SchoolAssignResult applySchool(Mob mob, ResourceLocation schoolId) {
+        return applySchool(mob, schoolId, MagicNpcSchoolChangedEvent.ChangeSource.COMMAND);
+    }
+
+    /**
+     * As {@link #applySchool(Mob, ResourceLocation)}, naming what asked for the change so the school
+     * event a listener or a script sees says whether this was the Tome, a command, or a script.
+     */
+    public static SchoolAssignResult applySchool(Mob mob, ResourceLocation schoolId,
+                                                 MagicNpcSchoolChangedEvent.ChangeSource source) {
         if (!MagicNpcsConfig.SCHOOLS_ENABLED.get()) {
             return SchoolAssignResult.SCHOOLS_DISABLED;
         }
@@ -243,7 +283,7 @@ public class IronsSpellcasterHandler {
         if (SchoolSpellPool.buildLoadout(school, mob) == null) {
             return SchoolAssignResult.NO_CASTABLE_SPELLS;
         }
-        SchoolData.set(mob, schoolId, true);
+        SchoolData.set(mob, schoolId, true, source);
         mob.addTag(MANUAL_SCHOOL_TAG);
         // Reconcile rather than apply directly: one code path decides what a mob should be running,
         // so a manual assignment cannot drift from what a reload or a join would have produced.
@@ -258,7 +298,12 @@ public class IronsSpellcasterHandler {
      * /the Tome, or return it to automatic with {@code /magicnpcs school auto}.
      */
     public static void clearSchool(Mob mob) {
-        SchoolData.markNonCaster(mob, true);
+        clearSchool(mob, MagicNpcSchoolChangedEvent.ChangeSource.COMMAND);
+    }
+
+    /** As {@link #clearSchool(Mob)}, naming what asked for it. */
+    public static void clearSchool(Mob mob, MagicNpcSchoolChangedEvent.ChangeSource source) {
+        SchoolData.markNonCaster(mob, true, source);
         mob.addTag(MANUAL_SCHOOL_TAG);
         CasterReconciler.removeSelfDefense(mob);
         CasterReconciler.reconcile(mob, ReconcileReason.MANUAL_SCHOOL);
@@ -272,7 +317,12 @@ public class IronsSpellcasterHandler {
      * "manual override fallback defect").
      */
     public static void resetSchoolToAuto(Mob mob) {
-        SchoolData.returnToAuto(mob);
+        resetSchoolToAuto(mob, MagicNpcSchoolChangedEvent.ChangeSource.COMMAND);
+    }
+
+    /** As {@link #resetSchoolToAuto(Mob)}, naming what asked for it. */
+    public static void resetSchoolToAuto(Mob mob, MagicNpcSchoolChangedEvent.ChangeSource source) {
+        SchoolData.returnToAuto(mob, source);
         mob.removeTag(MANUAL_SCHOOL_TAG);
         CasterReconciler.reconcile(mob, ReconcileReason.MANUAL_SCHOOL);
     }

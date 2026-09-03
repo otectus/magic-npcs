@@ -3,6 +3,7 @@ package com.otectus.magicnpcs.core.loadout;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
+import net.minecraft.resources.ResourceLocation;
 
 import java.util.Locale;
 
@@ -72,6 +73,16 @@ public final class LoadoutJson {
     public static final String COND_REQUIRE_RAID = "require_raid";
     public static final String COND_REQUIRE_STORM = "require_storm";
     public static final String COND_MOON_PHASES = "moon_phases";
+
+    // NPC-framework trait gate (0.7.x). Matched against the ids NpcAdapters reports for the mob, e.g.
+    // customnpcs:job/guard, so a pack can scope a loadout by the NPC mod's own configuration.
+    public static final String COND_NPC_TRAITS = "npc_traits";
+    /** Every listed trait must be present. */
+    public static final String TRAITS_ALL_OF = "all_of";
+    /** At least one listed trait must be present. */
+    public static final String TRAITS_ANY_OF = "any_of";
+    /** No listed trait may be present. */
+    public static final String TRAITS_NONE_OF = "none_of";
 
     // Per-spell reactive condition (0.4.0).
     public static final String CONDITION = "condition";
@@ -157,7 +168,20 @@ public final class LoadoutJson {
             c.moonPhases().forEach(phases::add);
             o.add(COND_MOON_PHASES, phases);
         }
+        JsonObject traits = new JsonObject();
+        addTraits(traits, TRAITS_ALL_OF, c.traitsAllOf());
+        addTraits(traits, TRAITS_ANY_OF, c.traitsAnyOf());
+        addTraits(traits, TRAITS_NONE_OF, c.traitsNoneOf());
+        if (!traits.entrySet().isEmpty()) {
+            o.add(COND_NPC_TRAITS, traits);
+        }
         return o;
+    }
+
+    private static void addTraits(JsonObject out, String key, java.util.Set<ResourceLocation> traits) {
+        if (traits != null && !traits.isEmpty()) {
+            out.add(key, stringArray(traits.stream().map(Object::toString).toList()));
+        }
     }
 
     public static JsonObject toJson(LoadoutEquipment e) {

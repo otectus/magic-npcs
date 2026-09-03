@@ -1,7 +1,10 @@
 package com.otectus.magicnpcs.integration.irons;
 
 import com.otectus.magicnpcs.MagicNpcs;
+import com.otectus.magicnpcs.api.event.MagicNpcCastEvent;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
+import com.otectus.magicnpcs.core.caster.MagicNpcEvents;
+import com.otectus.magicnpcs.core.caster.ManagedCasterState;
 import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.LivingEntity;
@@ -38,12 +41,16 @@ public final class DetachedCastDriver {
 
     private static final List<Detached> ACTIVE = new ArrayList<>();
 
+    /** Nothing here is the AI's decision: a detached cast was asked for by a script, command or dialog. */
+    private static final MagicNpcCastEvent.CastSource SOURCE = MagicNpcCastEvent.CastSource.SCRIPT;
+
     private DetachedCastDriver() {}
 
     /** Why a detached cast could not be started, for the caller to report to whoever asked for it. */
     public enum Refusal {
         SPELL_UNKNOWN,
         NOT_A_CASTER,
+        ON_COOLDOWN,
         REFUSED
     }
 
@@ -69,6 +76,11 @@ public final class DetachedCastDriver {
      * a scripted cast can never do something a chosen cast could not. Skipping those filters on a
      * secondary cast path is the defect this repository already recorded as B6.
      *
+     * <p>The per-spell cooldown is one of those gates: the AI path skips a spell that is still on
+     * cooldown when it chooses, and starts the cooldown itself once the session begins. A detached
+     * cast does both here, through {@link NpcSpellAttackGoal#cooldownFor}, so the two paths cannot
+     * disagree about how long a spell rests.
+     *
      * @param target the entity to cast at, or null for a self-cast
      * @param level  spell level; clamped by the spell's own minimum and maximum
      */
@@ -81,12 +93,31 @@ public final class DetachedCastDriver {
             return Result.no(Refusal.SPELL_UNKNOWN, "unknown spell " + spellId
                     + " — run /magicnpcs spells to list the ids this build accepts");
         }
-        MobCastSession.Start start = MobCastSession.begin(caster, target, spell, level);
-        if (!start.started()) {
-            return Result.no(Refusal.REFUSED, start.refusal() == null
-                    ? start.detail() : start.refusal().description());
+        // The AI path never even considers a spell that is resting, so neither may a script: without
+        // this a caller could recast on the very next tick and pay only the mana.
+        ManagedCasterState resting = ManagedCasterState.peek(caster);
+        int remaining = resting == null ? 0 : resting.cooldownRemaining(spellId, caster.tickCount);
+        if (remaining > 0) {
+            return Result.no(Refusal.ON_COOLDOWN,
+                    spellId + " is on cooldown for another " + remaining + " ticks");
         }
+        // The same announcements the AI path makes, only attributed to whoever asked. A script that
+        // vetoes its own NPC's cast in a cast_pre handler is answered here, before anything is spent.
+        if (!MagicNpcEvents.postCastPre(caster, spellId, level, target, SOURCE)) {
+            return Result.no(Refusal.REFUSED, "the cast was vetoed before it started");
+        }
+        MobCastSession.Start start = MobCastSession.begin(caster, target, spell, level, SOURCE);
+        if (!start.started()) {
+            String detail = start.refusal() == null ? start.detail() : start.refusal().description();
+            MagicNpcEvents.postFailed(caster, spellId, level, target, SOURCE, detail);
+            return Result.no(Refusal.REFUSED, detail);
+        }
+        // Cooldown starts with the cast, not with its completion — the same rule the goal applies, so
+        // a detached cast that is cancelled part-way through is not immediately retryable either.
+        ManagedCasterState.of(caster).startCooldown(spellId,
+                caster.tickCount + NpcSpellAttackGoal.cooldownFor(caster, spellId, spell));
         ACTIVE.add(new Detached(caster, start.session()));
+        MagicNpcEvents.postStarted(caster, spellId, level, target, SOURCE);
         if (MagicNpcsConfig.debugLogging()) {
             MagicNpcs.LOGGER.info("[cast] detached cast of {} started ({} active)",
                     spellId, ACTIVE.size());

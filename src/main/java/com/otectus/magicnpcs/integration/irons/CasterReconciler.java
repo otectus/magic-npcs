@@ -87,6 +87,13 @@ public final class CasterReconciler {
                 && state.catalogGeneration() == LoadoutManager.generation()) {
             // Already running exactly this. Do not replace the goal: that would refill mana, clear
             // cooldowns, and reset the decision cadence for no reason at all.
+            //
+            // The suppression wrappers are checked even so. They live in the same goal selector as
+            // the casting goal, so anything that rewrites that selector wholesale — CustomNPCs
+            // rebuilds an NPC's AI on a timer — can strip them while leaving our goal (re-added by a
+            // repair pass) in place. Left unrepaired the mob would cast and swing, which is exactly
+            // what native_attack=suppress exists to prevent.
+            reapplySuppressionIfLost(mob, state);
             result = ReconcileResult.of(ReconcileResult.Outcome.UNCHANGED, ReconcileResult.ReasonCode.UNCHANGED);
         } else {
             result = install(mob, desired.loadout(), hasAnyGoal);
@@ -302,6 +309,60 @@ public final class CasterReconciler {
         releaseNativeAttackPolicy(mob, state);
     }
 
+    /**
+     * Re-take the native-attack lease when our own state says we hold it but the wrappers are gone.
+     *
+     * <p>Only ever <em>adds</em> suppression back: a mob whose state does not claim suppression is
+     * left entirely alone, so this can never take over a mob we were not already holding.
+     */
+    private static void reapplySuppressionIfLost(Mob mob, ManagedCasterState state) {
+        if (state == null || !state.nativeAttackSuppressed() || AttackGoals.hasSuppressedGoals(mob)) {
+            return;
+        }
+        List<String> suppressed = AttackGoals.suppressNativeAttackGoals(mob);
+        if (!suppressed.isEmpty()) {
+            MagicNpcs.LOGGER.info("[magicnpcs] {}: native attack suppression was lost and has been "
+                            + "re-applied to {}", EntityType.getKey(mob.getType()),
+                    String.join(", ", suppressed));
+        }
+    }
+
+    /**
+     * @return true when everything Magic NPCs injected into {@code mob} is still exactly where it was
+     *         put: one casting goal, its companion movement goal, and the native-attack suppression
+     *         wrappers if and only if this caster's state claims them.
+     *
+     * <p>The question a compat bridge asks before requesting a repair, so a framework that rewrites
+     * goal selectors does not cost a full reconcile every time it does so. A mob that was never a
+     * managed caster answers true — there is nothing of ours to be missing.
+     *
+     * <p>The movement goal is expected whenever a casting goal is installed, because the install path
+     * adds the two together unconditionally; {@link CasterMovementGoal} decides for itself whether to
+     * actually run.
+     */
+    public static boolean ownedGoalsIntact(Mob mob) {
+        ManagedCasterState state = ManagedCasterState.peek(mob);
+        int spellGoals = 0;
+        int movementGoals = 0;
+        for (WrappedGoal wrapped : mob.goalSelector.getAvailableGoals()) {
+            Goal goal = wrapped.getGoal();
+            if (isOurSpellGoal(goal)) {
+                spellGoals++;
+            } else if (goal instanceof CasterMovementGoal) {
+                movementGoals++;
+            }
+        }
+        if (spellGoals == 0 && movementGoals == 0) {
+            // Not a caster right now. Only a mob whose state still claims a loadout is missing
+            // something; anything else legitimately has none of our goals.
+            return state == null || state.loadoutHash() == null;
+        }
+        if (spellGoals != 1 || movementGoals != 1) {
+            return false;
+        }
+        return state == null || state.nativeAttackSuppressed() == AttackGoals.hasSuppressedGoals(mob);
+    }
+
     private static void releaseNativeAttackPolicy(Mob mob, ManagedCasterState state) {
         if (!state.nativeAttackSuppressed() && !AttackGoals.hasSuppressedGoals(mob)) {
             return;
@@ -458,7 +519,20 @@ public final class CasterReconciler {
             MagicNpcs.LOGGER.warn("Loadout equipment references unknown item '{}' — skipping", itemId);
             return;
         }
-        mob.setItemInHand(hand, new ItemStack(item));
+        setHeldItem(mob, hand, new ItemStack(item));
+    }
+
+    /**
+     * Put an item in a hand the way the mob's own mod wants it done, falling back to vanilla.
+     *
+     * <p>Some NPC mods keep held equipment in their own inventory object and copy it onto the entity
+     * every tick, so a bare {@code setItemInHand} is overwritten and the loadout's {@code equipment}
+     * block appears to do nothing on those mobs.
+     */
+    private static void setHeldItem(Mob mob, InteractionHand hand, ItemStack stack) {
+        if (!NpcAdapters.resolve(mob).setHeldItem(mob, hand, stack)) {
+            mob.setItemInHand(hand, stack);
+        }
     }
 
     /** With the configured chance, equip a random spell-focus item so a held-focus rule can be met. */
@@ -475,7 +549,7 @@ public final class CasterReconciler {
                 return;
             }
             Item item = holders.get(mob.getRandom().nextInt(holders.size())).value();
-            mob.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(item));
+            setHeldItem(mob, InteractionHand.MAIN_HAND, new ItemStack(item));
         });
     }
 
@@ -571,6 +645,24 @@ public final class CasterReconciler {
             }
         }
         return null;
+    }
+
+    /**
+     * Cut short whatever {@code mob} is casting because a player started talking to it.
+     *
+     * <p>Exposed as a plain {@code Mob} method so a compat leaf can hand it over as a
+     * {@code Consumer<Mob>} method reference without naming any Iron's type of its own — the same
+     * shape the CustomNPCs bridge uses for goal repair.
+     *
+     * <p>Cooldowns are deliberately untouched: the cast is abandoned, not refunded, so an NPC cannot
+     * be made to skip its cooldown by opening and closing a dialog on it.
+     */
+    public static void cancelCastForDialog(Mob mob) {
+        NpcSpellAttackGoal goal = findSpellGoal(mob);
+        MobCastSession session = goal == null ? null : goal.session();
+        if (session != null && session.isRunning()) {
+            session.cancel(MobCastSession.CancelReason.DIALOG_OPENED);
+        }
     }
 
     /** @return the {@link WrappedGoal} wrapping any casting goal we injected, or {@code null}. */

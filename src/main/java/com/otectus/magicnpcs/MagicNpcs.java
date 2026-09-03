@@ -1,5 +1,6 @@
 package com.otectus.magicnpcs;
 
+import com.otectus.magicnpcs.compat.CustomNpcsCompat;
 import com.otectus.magicnpcs.compat.EasyNpcCompat;
 import com.otectus.magicnpcs.compat.IronsCompat;
 import com.otectus.magicnpcs.compat.RecruitsCompat;
@@ -90,6 +91,11 @@ public class MagicNpcs {
         if (EasyNpcCompat.isLoaded()) {
             EasyNpcIntegration.init();
         }
+
+        // CustomNPCs is reached only through a neutral facade: unlike the other two, an unsupported
+        // build of it is a link error rather than an absent class, so the guard has to survive being
+        // wrong about the API shape. Everything typed lives behind a reflective hop inside init().
+        CustomNpcsCompat.init(modEventBus);
     }
 
     /**
@@ -164,11 +170,15 @@ public class MagicNpcs {
     @SubscribeEvent
     public void onServerStopped(ServerStoppedEvent event) {
         ManagedCasterState.clearAll();
+        // Open-cast bookkeeping is keyed by entity UUID; a stale one from this world must not decide
+        // whether a cast in the next one may announce its ending.
+        com.otectus.magicnpcs.core.caster.MagicNpcEvents.clear();
         if (IronsCompat.isLoaded()) {
             com.otectus.magicnpcs.integration.irons.DetachedCastDriver.clearAll();
         }
         if (EasyNpcCompat.isLoaded()) {
             EasyNpcIntegration.shutdown();
         }
+        CustomNpcsCompat.shutdown();
     }
 }

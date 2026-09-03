@@ -1,7 +1,9 @@
 package com.otectus.magicnpcs.integration.irons;
 
 import com.otectus.magicnpcs.MagicNpcs;
+import com.otectus.magicnpcs.api.event.MagicNpcCastEvent;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
+import com.otectus.magicnpcs.core.caster.MagicNpcEvents;
 import io.redspace.ironsspellbooks.api.magic.MagicData;
 import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
 import io.redspace.ironsspellbooks.api.spells.CastSource;
@@ -62,6 +64,8 @@ public final class MobCastSession {
     private final MagicData data;
     private final CastType castType;
     private final boolean ownsCastData;
+    /** Whose decision this cast was, carried so the terminal announcements match the start. */
+    private final MagicNpcCastEvent.CastSource eventSource;
 
     private LivingEntity target;
     private State state = State.CHANNELLING;
@@ -78,7 +82,9 @@ public final class MobCastSession {
         CASTER_UNAVAILABLE("the caster died, was removed, or had its AI disabled"),
         SPELL_ASKED_TO_STOP("Iron's asked the caster to stop this spell"),
         RECONCILED("the mob's loadout or configuration changed mid-cast"),
-        GOAL_STOPPED("the casting goal was interrupted");
+        GOAL_STOPPED("the casting goal was interrupted"),
+        DIALOG_OPENED("a player started talking to this NPC"),
+        ADAPTER_REFUSED("the NPC's own mod refused the cast at the moment it was committed");
 
         private final String description;
 
@@ -119,7 +125,8 @@ public final class MobCastSession {
     }
 
     private MobCastSession(Mob caster, LivingEntity target, AbstractSpell spell, int level,
-                           MagicData data, boolean ownsCastData) {
+                           MagicData data, boolean ownsCastData,
+                           MagicNpcCastEvent.CastSource eventSource) {
         this.caster = caster;
         this.target = target;
         this.spell = spell;
@@ -127,6 +134,7 @@ public final class MobCastSession {
         this.data = data;
         this.castType = spell.getCastType();
         this.ownsCastData = ownsCastData;
+        this.eventSource = eventSource;
     }
 
     /**
@@ -136,6 +144,18 @@ public final class MobCastSession {
      * @return a started session, or the refusal reason — nothing is charged on refusal
      */
     public static Start begin(Mob caster, LivingEntity target, AbstractSpell spell, int level) {
+        return begin(caster, target, spell, level, MagicNpcCastEvent.CastSource.AI);
+    }
+
+    /**
+     * As {@link #begin(Mob, LivingEntity, AbstractSpell, int)}, for a cast nobody's AI decided on.
+     *
+     * <p>The source is carried on the session rather than passed to each announcement, because the
+     * terminal ones are posted from here — the session is the only thing that knows a cast finished —
+     * and a completion attributed to the AI for a cast a script asked for would be a lie.
+     */
+    public static Start begin(Mob caster, LivingEntity target, AbstractSpell spell, int level,
+                              MagicNpcCastEvent.CastSource eventSource) {
         if (!IronsBridge.isAllowedSpell(spell)) {
             return refuse(RefusalReason.BLACKLISTED, spell, caster, null);
         }
@@ -172,7 +192,7 @@ public final class MobCastSession {
         }
 
         MobCastSession session = new MobCastSession(caster, target, spell, level, data,
-                ownsCastData || data.getAdditionalCastData() != null);
+                ownsCastData || data.getAdditionalCastData() != null, eventSource);
         // Publish "this mob is mid-cast" where the vanilla-side movement goal can see it without
         // importing Iron's. A caster that strafes through its own channel throws away the aim it
         // takes every tick.
@@ -254,6 +274,7 @@ public final class MobCastSession {
             }
             finish(false);
             state = State.COMPLETE;
+            MagicNpcEvents.postCompleted(caster, spell.getSpellResource(), level, target, eventSource);
             return false;
         }
         if (castType == CastType.CONTINUOUS
@@ -279,6 +300,10 @@ public final class MobCastSession {
         }
         finish(true);
         state = State.CANCELLED;
+        // The terminal guard in MagicNpcEvents backs this up: a session cancelled by both its goal and
+        // itself must still announce exactly one ending.
+        MagicNpcEvents.postCancelled(caster, spell.getSpellResource(), level, target, eventSource,
+                reason.description());
     }
 
     private void finish(boolean cancelled) {

@@ -1,10 +1,17 @@
 package com.otectus.magicnpcs.core.adapter;
 
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.item.ItemStack;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -27,7 +34,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *       come from one explicitly selected provider: the highest-priority applicable adapter, because
  *       multiplying two mods' rank scaling together is not meaningful;</li>
  *   <li><b>movement</b> ({@code movementPolicy}) takes the most <em>restrictive</em> answer — see
- *       {@link NpcAdapter.MovementPolicy#and}.</li>
+ *       {@link NpcAdapter.MovementPolicy#and};</li>
+ *   <li><b>identity and equipment</b> ({@code frameworkId}, {@code ownerId}, {@code setHeldItem}) come
+ *       from the same single provider as scaling: two frameworks cannot both own one NPC, and two
+ *       adapters must not both write the same hand;</li>
+ *   <li><b>traits</b> ({@code traits}) is the <em>union</em> across every applicable adapter — a fact
+ *       one adapter knows is not made false by another adapter not knowing it;</li>
+ *   <li><b>signals</b> ({@code publish}) go to <em>every</em> applicable adapter and their veto answers
+ *       are OR-ed — an NPC that belongs to two frameworks must be announced to both, and either one
+ *       may stop a cast that has not started yet.</li>
  * </ul>
  *
  * <p>Pure — adapters are registered behind their own mod guards (e.g. {@code RecruitsCompat.isLoaded()}),
@@ -136,6 +151,47 @@ public final class NpcAdapters {
                 }
             }
             return false;
+        }
+
+        // --- identity and equipment: one selected provider ------------------------------------------
+
+        @Override
+        public Optional<ResourceLocation> frameworkId() {
+            return primary.frameworkId();
+        }
+
+        @Override
+        public Optional<UUID> ownerId(Mob mob) {
+            return primary.ownerId(mob);
+        }
+
+        @Override
+        public boolean setHeldItem(Mob mob, InteractionHand hand, ItemStack stack) {
+            return primary.setHeldItem(mob, hand, stack);
+        }
+
+        // --- traits: union --------------------------------------------------------------------------
+
+        @Override
+        public Set<ResourceLocation> traits(Mob mob) {
+            Set<ResourceLocation> union = new LinkedHashSet<>();
+            for (NpcAdapter adapter : all) {
+                union.addAll(adapter.traits(mob));
+            }
+            return union;
+        }
+
+        // --- signals: every adapter hears it, vetoes are OR-ed ------------------------------------
+
+        @Override
+        public boolean publish(Mob mob, MagicNpcSignal signal) {
+            boolean veto = false;
+            for (NpcAdapter adapter : all) {
+                // Deliberately not short-circuiting: a veto from the first adapter must not silence
+                // the second one's script, which may have state riding on hearing every cast.
+                veto |= adapter.publish(mob, signal);
+            }
+            return veto;
         }
 
         // --- state blockers: AND ------------------------------------------------------------------

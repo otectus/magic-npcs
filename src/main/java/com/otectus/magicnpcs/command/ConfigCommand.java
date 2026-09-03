@@ -3,6 +3,8 @@ package com.otectus.magicnpcs.command;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
+import com.otectus.magicnpcs.compat.CustomNpcsCompat;
+import com.otectus.magicnpcs.compat.EasyNpcCompat;
 import com.otectus.magicnpcs.compat.IronsCompat;
 import com.otectus.magicnpcs.compat.RecruitsCompat;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
@@ -86,6 +88,10 @@ public final class ConfigCommand {
         row(src, "Iron's Spells 'n Spellbooks", IronsCompat.isLoaded() ? "present" : "ABSENT",
                 IronsCompat.isLoaded() ? ChatFormatting.GREEN : ChatFormatting.RED);
         row(src, "Villager Recruits", RecruitsCompat.isLoaded() ? "present" : "absent", ChatFormatting.WHITE);
+        row(src, "Easy NPC", EasyNpcCompat.isLoaded() ? "present" : "absent", ChatFormatting.WHITE);
+        // CustomNPCs reports a status rather than presence: the bridge can be installed and still be
+        // off (unsupported build, failed probe, tripped breaker), and "present" would hide that.
+        row(src, "CustomNPCs", CustomNpcsCompat.statusLine(), customNpcsColour());
         row(src, "mob-cast manifest", SpellManifest.size() + " spells verified against Iron's "
                 + SpellManifest.VERIFIED_AGAINST, ChatFormatting.WHITE);
         row(src, "spells.allowUnverifiedSpells", String.valueOf(MagicNpcsConfig.allowUnverifiedSpells()),
@@ -198,6 +204,16 @@ public final class ConfigCommand {
 
     private static void header(CommandSourceStack src, String text) {
         src.sendSuccess(() -> Component.literal(text).withStyle(ChatFormatting.AQUA), false);
+    }
+
+    /** Green for a healthy bridge, red once it has stopped, yellow for anything in between. */
+    private static ChatFormatting customNpcsColour() {
+        return switch (CustomNpcsCompat.status()) {
+            case ACTIVE_PUBLIC_API, ACTIVE_FULL -> ChatFormatting.GREEN;
+            case PRESENT_UNSUPPORTED, PROBE_FAILED, DISABLED_ERROR -> ChatFormatting.RED;
+            case DEGRADED_AI_REPAIR -> ChatFormatting.YELLOW;
+            case ABSENT -> ChatFormatting.WHITE;
+        };
     }
 
     private static void row(CommandSourceStack src, String key, String value, ChatFormatting colour) {

@@ -1,5 +1,6 @@
 package com.otectus.magicnpcs.core.loadout;
 
+import com.otectus.magicnpcs.core.adapter.NpcAdapters;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
@@ -29,6 +30,9 @@ import java.util.Set;
  * @param requireRaid require an active raid at the mob's position
  * @param requireStorm require the world to be thundering
  * @param moonPhases  allowed moon phases 0..7; any if empty
+ * @param traitsAllOf  NPC-framework traits (see {@code NpcAdapter#traits}) the mob must have all of; unconstrained if empty
+ * @param traitsAnyOf  traits the mob must have at least one of; unconstrained if empty
+ * @param traitsNoneOf traits the mob must have none of; unconstrained if empty
  */
 public record LoadoutConditions(
         List<ResourceLocation> dimensions,
@@ -39,7 +43,10 @@ public record LoadoutConditions(
         Integer maxY,
         Boolean requireRaid,
         Boolean requireStorm,
-        List<Integer> moonPhases
+        List<Integer> moonPhases,
+        Set<ResourceLocation> traitsAllOf,
+        Set<ResourceLocation> traitsAnyOf,
+        Set<ResourceLocation> traitsNoneOf
 ) {
     public enum TimeOfDay { ANY, DAY, NIGHT }
 
@@ -81,7 +88,28 @@ public record LoadoutConditions(
         if (notEmpty(biomes) && !matchesBiome(level, mob)) {
             return false;
         }
+        if (!matchesTraits(mob)) {
+            return false;
+        }
         return true;
+    }
+
+    /**
+     * The NPC-framework gate. Asking the adapters costs a map lookup and a few reflective reads, so it
+     * runs last, after every cheap world term has had its chance to reject the mob.
+     */
+    private boolean matchesTraits(Mob mob) {
+        if (!notEmpty(traitsAllOf) && !notEmpty(traitsAnyOf) && !notEmpty(traitsNoneOf)) {
+            return true;
+        }
+        Set<ResourceLocation> traits = NpcAdapters.resolve(mob).traits(mob);
+        if (notEmpty(traitsAllOf) && !traits.containsAll(traitsAllOf)) {
+            return false;
+        }
+        if (notEmpty(traitsAnyOf) && traitsAnyOf.stream().noneMatch(traits::contains)) {
+            return false;
+        }
+        return !notEmpty(traitsNoneOf) || traitsNoneOf.stream().noneMatch(traits::contains);
     }
 
     private boolean matchesBiome(Level level, Mob mob) {
@@ -104,5 +132,9 @@ public record LoadoutConditions(
 
     private static boolean notEmpty(List<?> list) {
         return list != null && !list.isEmpty();
+    }
+
+    private static boolean notEmpty(Set<?> set) {
+        return set != null && !set.isEmpty();
     }
 }

@@ -1,5 +1,7 @@
 package com.otectus.magicnpcs.core;
 
+import com.otectus.magicnpcs.api.event.MagicNpcSchoolChangedEvent;
+import com.otectus.magicnpcs.core.caster.MagicNpcEvents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
@@ -81,11 +83,18 @@ public final class SchoolData {
      * another school, which made "I set this by mistake" unrecoverable.
      */
     public static void returnToAuto(Entity entity) {
+        returnToAuto(entity, MagicNpcSchoolChangedEvent.ChangeSource.RETURN_TO_AUTO);
+    }
+
+    /** As {@link #returnToAuto(Entity)}, naming what asked for it so the announcement can say. */
+    public static void returnToAuto(Entity entity, MagicNpcSchoolChangedEvent.ChangeSource source) {
+        Before before = Before.of(entity);
         if (entity.getPersistentData().contains(ROOT, CompoundTag.TAG_COMPOUND)) {
             CompoundTag tag = read(entity);
             tag.remove(KEY_SCHOOL);
             tag.remove(KEY_MANUAL);
         }
+        announce(entity, before, source);
     }
 
     /** Read-only view of our sub-compound: an empty, detached tag when we have never written to it. */
@@ -149,7 +158,7 @@ public final class SchoolData {
 
     /** Record an automatic (rolled) assignment. */
     public static void set(Entity entity, ResourceLocation school) {
-        set(entity.getPersistentData(), school, false);
+        set(entity, school, false, MagicNpcSchoolChangedEvent.ChangeSource.AUTO_ROLL);
     }
 
     /**
@@ -157,7 +166,24 @@ public final class SchoolData {
      * explicit loadout in {@code tryInject} and therefore survives chunk reloads.
      */
     public static void set(Entity entity, ResourceLocation school, boolean manual) {
+        set(entity, school, manual, manual
+                ? MagicNpcSchoolChangedEvent.ChangeSource.COMMAND
+                : MagicNpcSchoolChangedEvent.ChangeSource.AUTO_ROLL);
+    }
+
+    /**
+     * As {@link #set(Entity, ResourceLocation, boolean)}, naming what asked for the change.
+     *
+     * <p>The writers are the school mutation choke point: every path — Tome, command, automatic roll,
+     * script — ends up here, so this is the one place an announcement can be made exactly once per
+     * mutation. The older overloads delegate with the source their historical callers imply, which is
+     * why adding this did not have to touch every call site.
+     */
+    public static void set(Entity entity, ResourceLocation school, boolean manual,
+                           MagicNpcSchoolChangedEvent.ChangeSource source) {
+        Before before = Before.of(entity);
         set(entity.getPersistentData(), school, manual);
+        announce(entity, before, source);
     }
 
     static void set(CompoundTag persistentData, ResourceLocation school, boolean manual) {
@@ -171,25 +197,64 @@ public final class SchoolData {
         markNonCaster(entity, false);
     }
 
+    /** As {@link #markNonCaster(Entity, boolean)}, naming what asked for the change. */
+    public static void markNonCaster(Entity entity, boolean manual,
+                                     MagicNpcSchoolChangedEvent.ChangeSource source) {
+        Before before = Before.of(entity);
+        CompoundTag tag = write(entity);
+        tag.putString(KEY_SCHOOL, NONE);
+        setManualFlag(tag, manual);
+        announce(entity, before, source);
+    }
+
     /**
      * Sticky-mark this entity a non-caster. When {@code manual}, the mark also suppresses an explicit
      * loadout — otherwise "clear" would be permanent for school casters and purely cosmetic for
      * loadout-driven ones, which is how a cleared recruit came back after a reload.
      */
     public static void markNonCaster(Entity entity, boolean manual) {
-        CompoundTag tag = write(entity);
-        tag.putString(KEY_SCHOOL, NONE);
-        setManualFlag(tag, manual);
+        markNonCaster(entity, manual, manual
+                ? MagicNpcSchoolChangedEvent.ChangeSource.CLEAR
+                : MagicNpcSchoolChangedEvent.ChangeSource.AUTO_ROLL);
     }
 
     /** Remove any assignment, returning the entity to the unrolled state. */
     public static void clear(Entity entity) {
+        clear(entity, MagicNpcSchoolChangedEvent.ChangeSource.CLEAR);
+    }
+
+    /** As {@link #clear(Entity)}, naming what asked for it. */
+    public static void clear(Entity entity, MagicNpcSchoolChangedEvent.ChangeSource source) {
+        Before before = Before.of(entity);
         if (entity.getPersistentData().contains(ROOT, CompoundTag.TAG_COMPOUND)) {
             CompoundTag tag = read(entity);
             tag.remove(KEY_SCHOOL);
             tag.remove(KEY_MANUAL);
             tag.remove(KEY_PROFESSION);
         }
+        announce(entity, before, source);
+    }
+
+    /** The stored value and assignment state as they were before a write, so a no-op stays silent. */
+    private record Before(String raw, Mode mode) {
+        static Before of(Entity entity) {
+            return new Before(getRaw(entity), SchoolData.mode(entity));
+        }
+    }
+
+    /**
+     * Announce the change, unless nothing actually changed. Setting a mob to the school it already has
+     * is a legitimate thing for a command or a script to do, and firing an event for it would make
+     * every listener defensive about work it has already done.
+     */
+    private static void announce(Entity entity, Before before,
+                                 MagicNpcSchoolChangedEvent.ChangeSource source) {
+        String now = getRaw(entity);
+        Mode mode = mode(entity);
+        if (java.util.Objects.equals(before.raw(), now) && before.mode() == mode) {
+            return;
+        }
+        MagicNpcEvents.postSchoolChanged(entity, before.raw(), now, mode, source);
     }
 
     /**

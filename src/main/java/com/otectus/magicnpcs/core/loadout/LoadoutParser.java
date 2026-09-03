@@ -9,6 +9,7 @@ import net.minecraft.world.Difficulty;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -522,7 +523,56 @@ public final class LoadoutParser {
         Boolean storm = o.has(LoadoutJson.COND_REQUIRE_STORM)
                 ? GsonHelper.getAsBoolean(o, LoadoutJson.COND_REQUIRE_STORM) : null;
         List<Integer> moon = parseMoonPhases(o, pointer, problems);
-        return new LoadoutConditions(dims, biomes, diffs, time, minY, maxY, raid, storm, moon);
+        Set<ResourceLocation> allOf = Set.of();
+        Set<ResourceLocation> anyOf = Set.of();
+        Set<ResourceLocation> noneOf = Set.of();
+        if (o.has(LoadoutJson.COND_NPC_TRAITS)) {
+            JsonObject traits = GsonHelper.getAsJsonObject(o, LoadoutJson.COND_NPC_TRAITS);
+            String traitsPointer = pointer + "/" + LoadoutJson.COND_NPC_TRAITS;
+            LoadoutSchema.checkKeys(traits, LoadoutSchema.NPC_TRAITS_KEYS, traitsPointer, strict, problems);
+            allOf = parseTraitSet(traits, LoadoutJson.TRAITS_ALL_OF, traitsPointer, problems);
+            anyOf = parseTraitSet(traits, LoadoutJson.TRAITS_ANY_OF, traitsPointer, problems);
+            noneOf = parseTraitSet(traits, LoadoutJson.TRAITS_NONE_OF, traitsPointer, problems);
+        }
+        return new LoadoutConditions(dims, biomes, diffs, time, minY, maxY, raid, storm, moon,
+                allOf, anyOf, noneOf);
+    }
+
+    /**
+     * Read one {@code npc_traits} list. Unlike the world restrictions above there is no registry to
+     * check against — an NPC mod's traits exist only while that mod is installed — so a well-formed id
+     * naming a trait nobody reports is legal and simply never matches. Only a malformed id is an error,
+     * and it names its own index so the author can find it in a long list.
+     *
+     * <p>A missing or empty list means "no constraint", which is the same thing a missing
+     * {@code npc_traits} block means; there is nothing here to widen, so it is not reported.
+     */
+    private static Set<ResourceLocation> parseTraitSet(JsonObject o, String key, String parentPointer,
+                                                       List<LoadoutProblem> problems) {
+        if (!o.has(key)) {
+            return Set.of();
+        }
+        Set<ResourceLocation> out = new LinkedHashSet<>();
+        String base = parentPointer + "/" + key;
+        int i = 0;
+        for (JsonElement e : GsonHelper.getAsJsonArray(o, key)) {
+            String at = base + "/" + i++;
+            if (!e.isJsonPrimitive() || !e.getAsJsonPrimitive().isString()) {
+                problems.add(LoadoutProblem.error("BAD_NPC_TRAIT", at,
+                        "each \"" + key + "\" entry must be a string",
+                        "traits look like namespace:path, e.g. customnpcs:job/guard"));
+                continue;
+            }
+            ResourceLocation id = ResourceLocation.tryParse(e.getAsString());
+            if (id == null) {
+                problems.add(LoadoutProblem.error("BAD_NPC_TRAIT", at,
+                        "'" + e.getAsString() + "' is not a valid resource id",
+                        "traits look like namespace:path, e.g. customnpcs:job/guard"));
+                continue;
+            }
+            out.add(id);
+        }
+        return Set.copyOf(out);
     }
 
     /**
