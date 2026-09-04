@@ -5,6 +5,13 @@ compile against these mods in its dev environment, so their entity-type ids belo
 are documented from public sources and **must be verified for your exact version**
 (`/summon <id>` in-game, or check the mod's entity registry).
 
+**On spells:** Spells follow a layered support model — a spell's mob-cast capability is determined by
+(1) config overrides, (2) datapack manifests, (3) the built-in Iron's table, (4) namespace trust, or
+(5) nothing (unverified, skipped by default). Add-on spells start unverified and can be enabled through
+a manifest file (`data/<namespace>/spell_manifests/*.json`), namespace trust config, or the global
+opt-in. See [`docs/compat/irons-addons.md`](../compat/irons-addons.md) for the full guide, including
+offline auditing and in-game testing tools.
+
 ## How to use one
 
 1. Confirm the entity id (e.g. with `/data get entity @e[limit=1]` after spawning one,
@@ -32,11 +39,29 @@ shipped inside a mod jar for the same `entity_type` (+ optional `profession`) �
 `"replace": true` to beat the bundled `guardvillagers:guard` loadout any more. `replace` still
 arbitrates between *two datapacks*: if another pack also defines your entity type, the loadouts
 **pool** by default (each mob sticky-picks one), and a root-level `"replace": true` makes yours win.
-`/magicnpcs validate` lists **every discovered loadout file** with its status — active, shadowed,
-suppressed or rejected — so a file that failed to load is visible instead of vanishing into the log.
+`/magicnpcs validate` lists **every discovered loadout file** with its status, so a file that failed to load is visible instead of vanishing into the log.
 `/magicnpcs loadout entity <targets>` shows what a given mob resolves to, which pack it came from, and
 whether that is actually what its goal is running. `/magicnpcs why <targets>` explains why a mob is or
 isn't casting right now.
+
+### Loadout statuses and absent-mod handling
+
+`/magicnpcs validate` reports every discovered loadout with one of five statuses:
+
+| Status | Meaning |
+|--------|---------|
+| **ACTIVE** | Parsed and valid; this is the loadout the mob will use (or one of the pooled options). |
+| **SHADOWED** | Parsed and valid, but overridden by a higher-tier or `replace: true` loadout at the same key (datapack over jar, or explicit replacement). The shadowed file's state is preserved for diagnostics but not used at runtime. |
+| **SUPPRESSED** | Well-formed with `"enabled": false`; the file is intentionally inert. Useful for turning off bundled loadouts without deleting the file. |
+| **REJECTED** | Could not be parsed or failed validation (JSON error, unknown spell id, broken range, etc.). An error — something the author needs to fix. The file is never used. |
+| **SKIPPED (mod absent)** | Well-formed, but names a mod that is not installed, so it cannot apply here. Not an error — it is INFO-level, and the file automatically activates if the mod is later installed. Distinct from REJECTED to signal "not an author mistake". |
+
+**Handling of missing dependencies within a file:**
+
+- **Entity type or profession namespace absent:** The whole file becomes SKIPPED with INFO "entity type / profession `<id>` belongs to mod `<ns>`, which is not installed — loadout skipped: install the mod or delete the file". No error; runtime-invisible.
+- **Spell entry from absent mod:** That spell is dropped silently with INFO "entry dropped: mod `<ns>` is not installed"; the file continues to load with the remaining spells. If every spell entry was dropped that way, the file becomes SKIPPED instead of REJECTED (since nothing is wrong with the file, only the spells' mods are absent).
+- **Item reference from absent mod:** The item is dropped silently with INFO "item `<id>` belongs to mod `<ns>`, which is not installed — the item is dropped from this list; the rest of the loadout still loads". The file continues.
+- **Exception:** If every item in a `required_items` field comes from absent mods (leaving it empty), the file is still REJECTED with REQUIRED_ITEMS_EMPTIED error — a list that quietly empties itself would silently widen "only while holding a staff" to "always".
 
 **After editing a file, run `/reload`.** Every loaded mob is then re-evaluated, including mobs that
 were not casters before — so a skeleton that was standing there when you added the pack becomes a
@@ -237,6 +262,10 @@ opt-in `schools.villagers.selfDefense`. A raid will **not** do it: vanilla never
 villager. So a cleric battlemage stays peaceful unless you arrange one of those. For modded
 professions, use that mod's profession id (e.g. `morevillagers:fisherman`).
 
+### Spell role: `attack` vs `support` (optional)
+
+Each spell entry may declare a `role` field: `"attack"` (offensive, targets enemies) or `"support"` (self-cast heal/buff, used out of combat and in between fights). If omitted, the spell defaults to `attack`. SUPPORT spells are only cast when the mob is not in active combat, or when hurt and a matching condition permits it. Most self-heal and buff spells should use `"role": "support"`. Note that `haste` raycasts for a healable ally and, when the raycast finds no healable entity, it casts on the caster itself, making it safe for SUPPORT use despite its targeting behavior.
+
 ### Per-spell pacing & aim (optional)
 
 Any spell entry accepts optional tuning fields; omit them to inherit the global config
@@ -247,9 +276,69 @@ defaults under `[balance]` / `[targeting]`:
   floored by `minCooldownTicks`. e.g. `"cooldown": 100` = 5 s.
 - **`cooldown_multiplier`** — scales the spell's Iron's default cooldown. **Above 1.0 = slower
   (longer), below 1.0 = faster (shorter)** — so a *bigger* multiplier means a *longer* cooldown.
+- **`cast_time`** — absolute native cast duration, in **ticks**, for Iron's own LONG/CONTINUOUS cast.
+  This is the clearest option when you want exact control over how long a spell charges. Highest
+  precedence when set; overrides `cast_time_multiplier`.
+- **`cast_time_multiplier`** — scales Iron's effective native cast duration. `0.5` = roughly twice
+  as fast, `2.0` = twice as long. Ignored if `cast_time` is set.
 - **`windup`** — ticks the caster spends facing/tracking the target before an attack spell
   fires (re-checking line of sight/range; it only fires if the target is still valid). The caster's
   facing is snapped onto the target right before release, so even `0` (instant) fires on-aim.
+
+**Native cast time vs windup, precisely:**
+
+```
+windup
+  Magic NPCs-specific delay before Iron's starts casting.
+  Set to 0 to remove the extra telegraph/aim delay.
+
+cast_time
+  Absolute duration, in ticks, of Iron's own LONG/CONTINUOUS cast
+  for this NPC spell entry.
+
+cast_time_multiplier
+  Scales Iron's effective native cast duration.
+  0.5 = roughly twice as fast.
+  2.0 = twice as long.
+
+For LONG spells, this usually changes time-to-release.
+For CONTINUOUS spells, this also changes channel length.
+Neither field changes the lifetime of an effect spawned after casting.
+```
+
+**Gravity Fissure example** (`irons_spellbooks:gravity_fissure`, a LONG spell with 15-tick native cast in Iron's 3.16.3):
+
+With the multiplier form — cuts the cast time in half:
+```json
+{
+  "spell": "irons_spellbooks:gravity_fissure",
+  "role": "attack",
+  "windup": 0,
+  "cast_time_multiplier": 0.5
+}
+```
+Resolves to 8 ticks. The black hole's lifetime comes from spell power, not cast duration.
+
+Or the absolute form — exactly 6 ticks:
+```json
+{
+  "spell": "irons_spellbooks:gravity_fissure",
+  "role": "attack",
+  "windup": 0,
+  "cast_time": 6
+}
+```
+
+**Current releases before 0.9.0 have no native cast-duration syntax.** `"windup": 0` only removes Magic NPCs' own pre-cast delay; it cannot shorten Iron's native cast time. The two phases are distinct: windup → Iron's cast/channel → effect.
+
+**Ignored for INSTANT/NONE spells:** If either field is set on a spell whose cast type is INSTANT or NONE (like `magic_missile`), both fields are ignored at runtime. Run `/magicnpcs validate` to see the `CAST_TIME_IGNORED` warning.
+
+**Precedence:** `cast_time` always wins over `cast_time_multiplier` when both are set. The log reports this as info-level `CAST_TIME_ABSOLUTE_WINS`.
+
+**Parser strictness:** Malformed values are file-level errors that reject the whole loadout record:
+- `cast_time` must be an integer ≥ 0, else `CAST_TIME_NEGATIVE` error.
+- `cast_time_multiplier` must be a finite number ≥ 0, else `CAST_TIME_MULTIPLIER_INVALID` error.
+- Typo aliases exist for convenience: `cast_duration` → `cast_time`, `cast_duration_multiplier` → `cast_time_multiplier`, `casttime` → `cast_time`, `casttime_multiplier` → `cast_time_multiplier`. These are suggestions only and are never accepted as keys.
 
 Spell ids: see [`../irons_spell_ids.md`](../irons_spell_ids.md) or run `/magicnpcs spells`.
 

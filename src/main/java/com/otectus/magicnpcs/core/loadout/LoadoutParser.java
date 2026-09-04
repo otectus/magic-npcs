@@ -2,7 +2,6 @@ package com.otectus.magicnpcs.core.loadout;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.GsonHelper;
 import net.minecraft.world.Difficulty;
@@ -25,7 +24,9 @@ import java.util.Set;
  * problems, and its provenance, so validation can name the file, the pack, and the exact JSON pointer.
  *
  * <p>Registry-aware but Iron's-free: entity types, professions, items and difficulties are checked
- * here; spell ids need Iron's and are checked on the integration side.
+ * here through {@link RegistryChecks}; spell ids need Iron's and are checked on the integration side.
+ * An id whose owning mod is simply not installed is an INFO and an
+ * {@link LoadoutRecord.Status#INAPPLICABLE} record, never an error (I1).
  */
 public final class LoadoutParser {
 
@@ -41,32 +42,37 @@ public final class LoadoutParser {
     private LoadoutParser() {}
 
     /**
-     * Parse one file into a record.
-     *
-     * @param inferredEntityType the entity type read from a lower resource in the same stack; used
-     *                           only to give a bare {@code {"enabled": false}} suppression stub a key
-     * @param inferredProfession likewise for the optional villager profession
-     */
-    public static LoadoutRecord parse(ResourceLocation resourceId, JsonElement raw, String packId,
-                                      LoadoutSourceTier tier, boolean strict,
-                                      ResourceLocation inferredEntityType,
-                                      ResourceLocation inferredProfession) {
-        return parse(resourceId, raw, packId, tier, strict, inferredEntityType, inferredProfession, true);
-    }
-
-    /**
-     * As above, with registry existence checks made optional.
-     *
-     * @param checkRegistries true inside a game runtime, where entity types, professions and items can
-     *                        and must be resolved. False for the schema unit tests, which run without a
-     *                        bootstrapped Minecraft: {@code BuiltInRegistries} cannot even be
-     *                        classloaded there, and every id would otherwise read as "not registered".
-     *                        Never false in production - the datapack loader always passes true.
+     * As below, for callers with no live registries: {@code false} means {@link RegistryChecks#OFFLINE}.
+     * {@code true} has no meaning any more - the live checks are built by {@link LoadoutManager} and
+     * passed in.
      */
     public static LoadoutRecord parse(ResourceLocation resourceId, JsonElement raw, String packId,
                                       LoadoutSourceTier tier, boolean strict,
                                       ResourceLocation inferredEntityType,
                                       ResourceLocation inferredProfession, boolean checkRegistries) {
+        if (checkRegistries) {
+            throw new IllegalArgumentException("checkRegistries=true is no longer supported; pass the "
+                    + "RegistryChecks overload with LoadoutManager's live checks");
+        }
+        return parse(resourceId, raw, packId, tier, strict, inferredEntityType, inferredProfession,
+                RegistryChecks.OFFLINE);
+    }
+
+    /**
+     * Parse one file into a record.
+     *
+     * @param inferredEntityType the entity type read from a lower resource in the same stack; used
+     *                           only to give a bare {@code {"enabled": false}} suppression stub a key
+     * @param inferredProfession likewise for the optional villager profession
+     * @param checks             how ids and mod presence are resolved: the live registries in a game
+     *                           runtime, {@link RegistryChecks#OFFLINE} for the unit tests, which run
+     *                           without a bootstrapped Minecraft ({@code BuiltInRegistries} cannot even
+     *                           be classloaded there, and every id would read as "not registered")
+     */
+    public static LoadoutRecord parse(ResourceLocation resourceId, JsonElement raw, String packId,
+                                      LoadoutSourceTier tier, boolean strict,
+                                      ResourceLocation inferredEntityType,
+                                      ResourceLocation inferredProfession, RegistryChecks checks) {
         List<LoadoutProblem> problems = new ArrayList<>();
         JsonObject json;
         try {
@@ -84,9 +90,15 @@ public final class LoadoutParser {
         boolean replace = getBoolean(json, LoadoutJson.REPLACE, false, "", problems);
 
         ResourceLocation entityType =
-                readEntityType(json, enabled, inferredEntityType, checkRegistries, problems);
+                readEntityType(json, enabled, inferredEntityType, checks, problems);
         ResourceLocation profession =
-                readProfession(json, inferredProfession, checkRegistries, problems);
+                readProfession(json, inferredProfession, checks, problems);
+        // A missing scope mod is not an author error: the file simply does not apply here. An absent
+        // profession mod skips the whole file rather than dropping the key, because a null profession
+        // means "every profession" - it would widen "cleric villagers only" to "all villagers".
+        if (scopeModAbsent(problems)) {
+            return inapplicable(resourceId, packId, tier, entityType, profession, problems, hash);
+        }
         if (entityType == null) {
             return rejected(resourceId, packId, tier, null, profession, problems, hash);
         }
@@ -119,14 +131,14 @@ public final class LoadoutParser {
         LoadoutEquipment equipment = null;
         if (json.has(LoadoutJson.EQUIPMENT)) {
             equipment = parseEquipment(GsonHelper.getAsJsonObject(json, LoadoutJson.EQUIPMENT),
-                    strict, checkRegistries, problems);
+                    strict, checks, problems);
         }
         LoadoutConditions conditions = null;
         if (json.has(LoadoutJson.CONDITIONS)) {
             conditions = parseConditions(GsonHelper.getAsJsonObject(json, LoadoutJson.CONDITIONS), strict, problems);
         }
 
-        List<LoadoutEntry> spells = parseSpells(json, enabled, strict, checkRegistries, problems);
+        List<LoadoutEntry> spells = parseSpells(json, enabled, strict, checks, problems);
 
         SpellcasterLoadout loadout = new SpellcasterLoadout(entityType, profession, maxMana, manaRegen,
                 List.copyOf(spells), equipment, conditions, poolWeight, resourceId, replace, enabled,
@@ -136,6 +148,11 @@ public final class LoadoutParser {
         for (LoadoutProblem p : problems) {
             fatal |= p.severity() == LoadoutProblem.Severity.ERROR;
         }
+        if (!fatal && enabled && spells.isEmpty() && hasCode(problems, "SPELL_MOD_ABSENT")) {
+            // Every entry named a spell from a mod that is not installed: nothing to cast, and nothing
+            // for the author to fix.
+            return inapplicable(resourceId, packId, tier, entityType, profession, problems, hash);
+        }
         LoadoutRecord.Status status = fatal ? LoadoutRecord.Status.REJECTED
                 : (enabled ? LoadoutRecord.Status.ACTIVE : LoadoutRecord.Status.SUPPRESSED);
         return new LoadoutRecord(resourceId, packId, tier, status, entityType, profession,
@@ -143,7 +160,7 @@ public final class LoadoutParser {
     }
 
     private static List<LoadoutEntry> parseSpells(JsonObject json, boolean enabled, boolean strict,
-                                                  boolean checkRegistries, List<LoadoutProblem> problems) {
+                                                  RegistryChecks checks, List<LoadoutProblem> problems) {
         List<LoadoutEntry> spells = new ArrayList<>();
         if (!json.has(LoadoutJson.SPELLS)) {
             // A disabled loadout may omit "spells" entirely — switching a type off is the whole point,
@@ -163,20 +180,28 @@ public final class LoadoutParser {
             return spells;
         }
         int i = 0;
+        int entries = 0;
+        int absentMod = 0;
         for (JsonElement element : arr.getAsJsonArray()) {
             String pointer = "/" + LoadoutJson.SPELLS + "/" + i++;
+            entries++;
             if (!element.isJsonObject()) {
                 problems.add(LoadoutProblem.error("SPELL_NOT_OBJECT", pointer,
                         "each \"spells\" entry must be an object"));
                 continue;
             }
+            int before = problems.size();
             LoadoutEntry entry =
-                    parseEntry(element.getAsJsonObject(), pointer, strict, checkRegistries, problems);
+                    parseEntry(element.getAsJsonObject(), pointer, strict, checks, problems);
             if (entry != null) {
                 spells.add(entry);
+            } else if (addedCode(problems, before, "SPELL_MOD_ABSENT")) {
+                absentMod++;
             }
         }
-        if (enabled && spells.isEmpty()) {
+        // "nothing to cast" is the author's problem only when something they wrote was wrong; entries
+        // dropped because their mod is absent make the whole file INAPPLICABLE instead.
+        if (enabled && spells.isEmpty() && !(entries > 0 && absentMod == entries)) {
             problems.add(LoadoutProblem.error("NO_CASTABLE_SPELLS", "/" + LoadoutJson.SPELLS,
                     "no spell entry could be read, so this mob would have nothing to cast",
                     "fix the entries reported above, or set \"enabled\": false"));
@@ -187,7 +212,7 @@ public final class LoadoutParser {
     // --- root fields -------------------------------------------------------------------------
 
     private static ResourceLocation readEntityType(JsonObject json, boolean enabled,
-                                                   ResourceLocation inferred, boolean checkRegistries,
+                                                   ResourceLocation inferred, RegistryChecks checks,
                                                    List<LoadoutProblem> problems) {
         if (!json.has(LoadoutJson.ENTITY_TYPE)) {
             // The bare `{ "enabled": false }` suppression stub the docs have always shown. 0.6.1 read
@@ -222,7 +247,14 @@ public final class LoadoutParser {
                     "ids look like namespace:path, e.g. minecraft:skeleton"));
             return null;
         }
-        if (checkRegistries && !BuiltInRegistries.ENTITY_TYPE.containsKey(id)) {
+        if (!checks.modLoaded(id.getNamespace())) {
+            problems.add(LoadoutProblem.info("MOD_ABSENT", "/" + LoadoutJson.ENTITY_TYPE,
+                    "entity type '" + id + "' belongs to mod '" + id.getNamespace()
+                            + "', which is not installed",
+                    "loadout skipped: install the mod or delete the file"));
+            return null;
+        }
+        if (!checks.entityTypeExists(id)) {
             problems.add(LoadoutProblem.error("UNKNOWN_ENTITY_TYPE", "/" + LoadoutJson.ENTITY_TYPE,
                     "no entity type '" + id + "' is registered",
                     "check the spelling, and that the mod owning '" + id.getNamespace() + "' is installed"));
@@ -232,7 +264,7 @@ public final class LoadoutParser {
     }
 
     private static ResourceLocation readProfession(JsonObject json, ResourceLocation inferred,
-                                                   boolean checkRegistries, List<LoadoutProblem> problems) {
+                                                   RegistryChecks checks, List<LoadoutProblem> problems) {
         if (!json.has(LoadoutJson.PROFESSION)) {
             return inferred;
         }
@@ -250,7 +282,14 @@ public final class LoadoutParser {
                     "'" + raw + "' is not a valid resource id"));
             return null;
         }
-        if (checkRegistries && !BuiltInRegistries.VILLAGER_PROFESSION.containsKey(id)) {
+        if (!checks.modLoaded(id.getNamespace())) {
+            problems.add(LoadoutProblem.info("MOD_ABSENT", "/" + LoadoutJson.PROFESSION,
+                    "profession '" + id + "' belongs to mod '" + id.getNamespace()
+                            + "', which is not installed",
+                    "loadout skipped: install the mod or delete the file"));
+            return null;
+        }
+        if (!checks.professionExists(id)) {
             problems.add(LoadoutProblem.error("UNKNOWN_PROFESSION", "/" + LoadoutJson.PROFESSION,
                     "no villager profession '" + id + "' is registered",
                     "e.g. minecraft:cleric, minecraft:librarian"));
@@ -262,7 +301,7 @@ public final class LoadoutParser {
     // --- spell entries -----------------------------------------------------------------------
 
     private static LoadoutEntry parseEntry(JsonObject o, String pointer, boolean strict,
-                                           boolean checkRegistries, List<LoadoutProblem> problems) {
+                                           RegistryChecks checks, List<LoadoutProblem> problems) {
         LoadoutSchema.checkKeys(o, LoadoutSchema.SPELL_KEYS, pointer, strict, problems);
         if (!o.has(LoadoutJson.SPELL)) {
             problems.add(LoadoutProblem.error("MISSING_SPELL", pointer,
@@ -283,6 +322,11 @@ public final class LoadoutParser {
             problems.add(LoadoutProblem.error("BAD_SPELL_ID", pointer + "/" + LoadoutJson.SPELL,
                     "'" + rawSpell + "' is not a valid resource id",
                     "ids look like irons_spellbooks:magic_missile"));
+            return null;
+        }
+        if (!checks.modLoaded(spellId.getNamespace())) {
+            problems.add(LoadoutProblem.info("SPELL_MOD_ABSENT", pointer + "/" + LoadoutJson.SPELL,
+                    "entry dropped: mod '" + spellId.getNamespace() + "' is not installed"));
             return null;
         }
         LoadoutEntry.Role role = LoadoutEntry.Role.ATTACK;
@@ -329,13 +373,45 @@ public final class LoadoutParser {
         if (o.has(LoadoutJson.WINDUP)) {
             windup = Math.max(0, getInt(o, LoadoutJson.WINDUP, 0, pointer, problems));
         }
+        // Unlike cooldown/windup, a bad native cast time is rejected rather than clamped: silently
+        // turning "cast_time": -1 into 0 would look like a working instant cast.
+        Integer castTime = null;
+        if (o.has(LoadoutJson.CAST_TIME)) {
+            castTime = getInt(o, LoadoutJson.CAST_TIME, 0, pointer, problems);
+            if (castTime < 0) {
+                problems.add(LoadoutProblem.error("CAST_TIME_NEGATIVE", pointer + "/" + LoadoutJson.CAST_TIME,
+                        "cast_time must be zero or greater"));
+                return null;
+            }
+        }
+        Double castTimeMult = null;
+        if (o.has(LoadoutJson.CAST_TIME_MULTIPLIER)) {
+            try {
+                castTimeMult = GsonHelper.getAsDouble(o, LoadoutJson.CAST_TIME_MULTIPLIER);
+            } catch (Exception ex) {
+                problems.add(LoadoutProblem.error("NOT_A_NUMBER", pointer + "/" + LoadoutJson.CAST_TIME_MULTIPLIER,
+                        "\"" + LoadoutJson.CAST_TIME_MULTIPLIER + "\" must be a number"));
+                return null;
+            }
+            if (!Double.isFinite(castTimeMult) || castTimeMult < 0.0) {
+                problems.add(LoadoutProblem.error("CAST_TIME_MULTIPLIER_INVALID",
+                        pointer + "/" + LoadoutJson.CAST_TIME_MULTIPLIER,
+                        "cast_time_multiplier must be a finite number zero or greater"));
+                return null;
+            }
+        }
+        if (castTime != null && castTimeMult != null) {
+            problems.add(LoadoutProblem.info("CAST_TIME_ABSOLUTE_WINS",
+                    pointer + "/" + LoadoutJson.CAST_TIME_MULTIPLIER,
+                    "cast_time overrides cast_time_multiplier for this spell"));
+        }
         CastCondition condition = o.has(LoadoutJson.CONDITION)
                 ? parseCondition(GsonHelper.getAsJsonObject(o, LoadoutJson.CONDITION),
                         pointer + "/" + LoadoutJson.CONDITION, strict, problems)
                 : null;
 
         boolean requireHeld = getBoolean(o, LoadoutJson.REQUIRE_HELD_ITEM, false, pointer, problems);
-        List<String> requiredItems = readItemRefs(o, pointer, checkRegistries, problems);
+        List<String> requiredItems = readItemRefs(o, pointer, checks, problems);
         LoadoutEntry.HandRequirement hand = LoadoutEntry.HandRequirement.EITHER;
         if (o.has(LoadoutJson.REQUIRED_HAND)) {
             try {
@@ -359,7 +435,8 @@ public final class LoadoutParser {
         }
 
         return new LoadoutEntry(spellId, level, weight, minRange, maxRange, safety, role,
-                castChance, cooldown, cooldownMult, windup, condition, requireHeld, requiredItems, hand);
+                castChance, cooldown, cooldownMult, castTime, castTimeMult, windup, condition,
+                requireHeld, requiredItems, hand);
     }
 
     /**
@@ -367,7 +444,7 @@ public final class LoadoutParser {
      * registry. An unresolvable entry is an error, never a silent drop — a list that quietly empties
      * itself would turn "only while holding a staff" into "always".
      */
-    private static List<String> readItemRefs(JsonObject o, String pointer, boolean checkRegistries,
+    private static List<String> readItemRefs(JsonObject o, String pointer, RegistryChecks checks,
                                              List<LoadoutProblem> problems) {
         if (!o.has(LoadoutJson.REQUIRED_ITEMS)) {
             return List.of();
@@ -385,7 +462,14 @@ public final class LoadoutParser {
                         "'" + raw + "' is not a valid item id or #tag reference"));
                 continue;
             }
-            if (!raw.startsWith("#") && checkRegistries && !BuiltInRegistries.ITEM.containsKey(id)) {
+            if (!raw.startsWith("#") && !checks.modLoaded(id.getNamespace())) {
+                problems.add(LoadoutProblem.info("MOD_ABSENT", at,
+                        "item '" + id + "' belongs to mod '" + id.getNamespace()
+                                + "', which is not installed",
+                        "the item is dropped from this list; the rest of the loadout still loads"));
+                continue;
+            }
+            if (!raw.startsWith("#") && !checks.itemExists(id)) {
                 problems.add(LoadoutProblem.error("UNKNOWN_ITEM", at,
                         "no item '" + id + "' is registered",
                         "use #namespace:tag for a tag, e.g. #magicnpcs:spell_focuses"));
@@ -405,14 +489,14 @@ public final class LoadoutParser {
 
     // --- nested blocks -----------------------------------------------------------------------
 
-    private static LoadoutEquipment parseEquipment(JsonObject o, boolean strict, boolean checkRegistries,
+    private static LoadoutEquipment parseEquipment(JsonObject o, boolean strict, RegistryChecks checks,
                                                    List<LoadoutProblem> problems) {
         String pointer = "/" + LoadoutJson.EQUIPMENT;
         LoadoutSchema.checkKeys(o, LoadoutSchema.EQUIPMENT_KEYS, pointer, strict, problems);
         List<LoadoutEquipment.WeightedItem> mainhand =
-                parseWeightedItems(o, LoadoutJson.MAINHAND, pointer, checkRegistries, problems);
+                parseWeightedItems(o, LoadoutJson.MAINHAND, pointer, checks, problems);
         List<LoadoutEquipment.WeightedItem> offhand =
-                parseWeightedItems(o, LoadoutJson.OFFHAND, pointer, checkRegistries, problems);
+                parseWeightedItems(o, LoadoutJson.OFFHAND, pointer, checks, problems);
         double chance = o.has(LoadoutJson.CHANCE) ? readFraction(o, LoadoutJson.CHANCE, pointer, problems) : 1.0;
         boolean onlyIfEmpty = getBoolean(o, LoadoutJson.ONLY_IF_EMPTY, true, pointer, problems);
         if (mainhand.isEmpty() && offhand.isEmpty()) {
@@ -425,7 +509,7 @@ public final class LoadoutParser {
     }
 
     private static List<LoadoutEquipment.WeightedItem> parseWeightedItems(
-            JsonObject o, String key, String parentPointer, boolean checkRegistries,
+            JsonObject o, String key, String parentPointer, RegistryChecks checks,
             List<LoadoutProblem> problems) {
         if (!o.has(key)) {
             return List.of();
@@ -450,7 +534,14 @@ public final class LoadoutParser {
                         "'" + rawId + "' is not a valid item id"));
                 continue;
             }
-            if (checkRegistries && !BuiltInRegistries.ITEM.containsKey(id)) {
+            if (!checks.modLoaded(id.getNamespace())) {
+                problems.add(LoadoutProblem.info("MOD_ABSENT", at,
+                        "item '" + id + "' belongs to mod '" + id.getNamespace()
+                                + "', which is not installed",
+                        "the item is dropped from this list; the rest of the loadout still loads"));
+                continue;
+            }
+            if (!checks.itemExists(id)) {
                 problems.add(LoadoutProblem.error("UNKNOWN_ITEM", at,
                         "no item '" + id + "' is registered"));
                 continue;
@@ -773,5 +864,48 @@ public final class LoadoutParser {
                                           List<LoadoutProblem> problems, String hash) {
         return new LoadoutRecord(id, packId, tier, LoadoutRecord.Status.REJECTED, entityType,
                 profession, null, problems, hash);
+    }
+
+    /**
+     * The file names a mod that is not installed. Terminal like {@link #rejected}, but nobody's
+     * mistake: no loadout, no ERROR, and every consumer reports it as skipped rather than failed.
+     */
+    private static LoadoutRecord inapplicable(ResourceLocation id, String packId, LoadoutSourceTier tier,
+                                              ResourceLocation entityType, ResourceLocation profession,
+                                              List<LoadoutProblem> problems, String hash) {
+        return new LoadoutRecord(id, packId, tier, LoadoutRecord.Status.INAPPLICABLE, entityType,
+                profession, null, problems, hash);
+    }
+
+    /**
+     * @return true when the entity type or profession scoping this file belongs to an absent mod and
+     *         nothing else went wrong. An ERROR still wins: a real mistake is worth reporting even in a
+     *         file that would not have applied here.
+     */
+    private static boolean scopeModAbsent(List<LoadoutProblem> problems) {
+        boolean absent = false;
+        for (LoadoutProblem p : problems) {
+            if (p.severity() == LoadoutProblem.Severity.ERROR) {
+                return false;
+            }
+            absent |= p.code().equals("MOD_ABSENT")
+                    && (p.pointer().equals("/" + LoadoutJson.ENTITY_TYPE)
+                            || p.pointer().equals("/" + LoadoutJson.PROFESSION));
+        }
+        return absent;
+    }
+
+    private static boolean hasCode(List<LoadoutProblem> problems, String code) {
+        return addedCode(problems, 0, code);
+    }
+
+    /** @return true when a problem with {@code code} sits at or after index {@code from}. */
+    private static boolean addedCode(List<LoadoutProblem> problems, int from, String code) {
+        for (int i = from; i < problems.size(); i++) {
+            if (problems.get(i).code().equals(code)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -21,6 +21,13 @@ import net.minecraft.resources.ResourceLocation;
  *                           multiplier path. Highest precedence when set (still floored)
  * @param cooldownMultiplier optional per-spell cooldown multiplier replacing the global one;
  *                           {@code null} inherits {@code balance.cooldownMultiplier}
+ * @param castTimeTicks      optional absolute native cast duration in ticks for this spell, replacing
+ *                           Iron's own cast time. Highest precedence when set; {@code null} falls
+ *                           through to the multiplier path
+ * @param castTimeMultiplier optional multiplier on Iron's effective cast time for this spell;
+ *                           {@code null} leaves Iron's timing unchanged. Both fields {@code null}
+ *                           means Iron's timing is used as-is, and both are ignored for spells whose
+ *                           cast type is INSTANT or NONE
  * @param windupTicks        optional aim wind-up in ticks before an attack spell fires; {@code null}
  *                           inherits {@code targeting.castWindupTicks}
  * @param condition          optional reactive trigger gating this spell's eligibility (self/target HP,
@@ -44,6 +51,8 @@ public record LoadoutEntry(
         Double castChance,
         Integer cooldownTicks,
         Double cooldownMultiplier,
+        Integer castTimeTicks,
+        Double castTimeMultiplier,
         Integer windupTicks,
         CastCondition condition,
         boolean requireHeldItem,
@@ -90,7 +99,8 @@ public record LoadoutEntry(
                         double safetyRadius, Role role, Double castChance, Integer cooldownTicks,
                         Double cooldownMultiplier, Integer windupTicks, CastCondition condition) {
         this(spell, level, weight, minRange, maxRange, safetyRadius, role, castChance, cooldownTicks,
-                cooldownMultiplier, windupTicks, condition, false, java.util.List.of(), HandRequirement.EITHER);
+                cooldownMultiplier, null, null, windupTicks, condition, false, java.util.List.of(),
+                HandRequirement.EITHER);
     }
 
     /**
@@ -101,6 +111,6 @@ public record LoadoutEntry(
     public LoadoutEntry(ResourceLocation spell, int level, int weight,
                         double minRange, double maxRange, double safetyRadius, Role role) {
         this(spell, level, weight, minRange, maxRange, safetyRadius, role, null, null, null, null, null,
-                false, java.util.List.of(), HandRequirement.EITHER);
+                null, null, false, java.util.List.of(), HandRequirement.EITHER);
     }
 }

@@ -29,6 +29,10 @@ public final class LoadoutJson {
     public static final String COOLDOWN = "cooldown";
     public static final String COOLDOWN_MULTIPLIER = "cooldown_multiplier";
     public static final String WINDUP = "windup";
+    /** Absolute native cast duration in ticks for this spell; highest precedence. */
+    public static final String CAST_TIME = "cast_time";
+    /** Multiplier on Iron's effective cast time for this spell. */
+    public static final String CAST_TIME_MULTIPLIER = "cast_time_multiplier";
 
     // Per-spell held-item requirement (0.6.0, restored in 0.6.2 — audit REL-002). All optional.
     /** {@code true} gates this spell on the caster holding one of {@link #REQUIRED_ITEMS}. */
@@ -238,6 +242,12 @@ public final class LoadoutJson {
         }
         if (entry.cooldownMultiplier() != null) {
             o.addProperty(COOLDOWN_MULTIPLIER, entry.cooldownMultiplier());
+        }
+        if (entry.castTimeTicks() != null) {
+            o.addProperty(CAST_TIME, entry.castTimeTicks());
+        }
+        if (entry.castTimeMultiplier() != null) {
+            o.addProperty(CAST_TIME_MULTIPLIER, entry.castTimeMultiplier());
         }
         if (entry.windupTicks() != null) {
             o.addProperty(WINDUP, entry.windupTicks());

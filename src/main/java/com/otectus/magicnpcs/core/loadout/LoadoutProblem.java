@@ -51,6 +51,10 @@ public record LoadoutProblem(Severity severity, String code, String pointer, Str
         return new LoadoutProblem(Severity.INFO, code, pointer, message, null);
     }
 
+    public static LoadoutProblem info(String code, String pointer, String message, String suggestion) {
+        return new LoadoutProblem(Severity.INFO, code, pointer, message, suggestion);
+    }
+
     /** {@code ERROR my_pack:skeleton /spells/0/spell: unknown spell … (did you mean …?)} */
     public String describe() {
         StringBuilder sb = new StringBuilder();

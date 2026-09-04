@@ -1,5 +1,8 @@
 package com.otectus.magicnpcs.config;
 
+import com.otectus.magicnpcs.core.spell.CapabilityOverrides;
+import com.otectus.magicnpcs.core.spell.SpellCapability;
+import com.otectus.magicnpcs.core.spell.SpellIdFilter;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.common.ForgeConfigSpec;
 import net.minecraftforge.fml.ModList;
@@ -8,6 +11,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 /**
  * Configuration for NPC spellcasting, split across two specs (ADR 0004):
@@ -37,6 +43,7 @@ public final class MagicNpcsConfig {
     public static final ForgeConfigSpec.BooleanValue CASTING_GOAL_USES_LOOK_FLAG;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> DISABLED_ENTITY_TYPES;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SUPPRESSIBLE_ATTACK_GOALS;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> ATTACK_GOAL_NAME_PATTERNS;
     public static final ForgeConfigSpec.BooleanValue STRICT_LOADOUT_SCHEMA;
     public static final ForgeConfigSpec.IntValue RECONCILE_BATCH_SIZE;
     /** @deprecated moved to {@code magicnpcs-common.toml}; read for one release. Use {@link #debugLogging()}. */
@@ -67,6 +74,14 @@ public final class MagicNpcsConfig {
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SPELL_BLACKLIST;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SPELL_WHITELIST;
     public static final ForgeConfigSpec.BooleanValue ALLOW_UNVERIFIED_SPELLS;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SPELL_TRUSTED_NAMESPACES;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SPELL_CAPABILITY_OVERRIDES;
+
+    /** Parsed views of the two list-valued spell settings; dropped by {@link #invalidateCaches()}. */
+    private static volatile Set<String> trustedNamespacesCache;
+    private static volatile Map<ResourceLocation, SpellCapability> capabilityOverridesCache;
+    /** Compiled {@code general.attackGoalNamePatterns}; dropped by {@link #invalidateCaches()}. */
+    private static volatile List<Pattern> attackGoalNamePatternsCache;
     public static final ForgeConfigSpec.BooleanValue REQUIRE_LINE_OF_SIGHT;
     public static final ForgeConfigSpec.IntValue CAST_WINDUP_TICKS;
     public static final ForgeConfigSpec.BooleanValue PROTECT_BYSTANDERS;
@@ -215,6 +230,15 @@ public final class MagicNpcsConfig {
             // it — matching is by simple name precisely so mods we cannot import are reachable.
             "BowAttackGoal", "CrossbowAttackGoal", "GunAttackGoal", "CustomMeleeAttackGoal");
 
+    /**
+     * Regexes that recognise a modded attack goal the exact-name list has never heard of. Case
+     * sensitive and matched with {@link java.util.regex.Matcher#find()}, so {@code "Attack"} catches
+     * {@code LaserAttackGoal} but not {@code Rainbow}. Only ever applied to goals that are not target
+     * goals, are not Magic NPCs' own, and declare {@code MOVE} or {@code LOOK}.
+     */
+    private static final List<String> DEFAULT_ATTACK_GOAL_NAME_PATTERNS = List.of(
+            "Attack", "Ranged", "Shoot", "Bow", "Crossbow", "Gun", "Spit", "Breath", "Charge", "Cast");
+
     private static final String TKEY = "magicnpcs.configuration.";
 
     static {
@@ -252,6 +276,17 @@ public final class MagicNpcsConfig {
                 .translation(TKEY + "suppressibleAttackGoals")
                 .defineListAllowEmpty("suppressibleAttackGoals", () -> List.<String>of(),
                         o -> o instanceof String s && !s.isBlank());
+        ATTACK_GOAL_NAME_PATTERNS = b
+                .comment("Case-sensitive regular expressions that recognise a mod's attack goal by class name,",
+                        "for mods whose goal classes are not worth naming one by one.",
+                        "Each is matched with find() against the goal's simple class name and its",
+                        "\"Outer$Inner\" nested name, and only against goals that are not target goals, are not",
+                        "Magic NPCs' own, and declare the MOVE or LOOK control flag.",
+                        "Used by a loadout's \"native_attack\": \"yield\" or \"suppress\" and reported by",
+                        "/magicnpcs why. Additive to suppressibleAttackGoals; clear the list to disable.")
+                .translation(TKEY + "attackGoalNamePatterns")
+                .defineListAllowEmpty("attackGoalNamePatterns", () -> DEFAULT_ATTACK_GOAL_NAME_PATTERNS,
+                        MagicNpcsConfig::isRegex);
         STRICT_LOADOUT_SCHEMA = b
                 .comment("Reject a spellcaster loadout that contains a key Magic NPCs does not recognise,",
                         "instead of warning about it and loading the rest of the file.",
@@ -458,13 +493,16 @@ public final class MagicNpcsConfig {
 
         b.push("spells");
         SPELL_BLACKLIST = b
-                .comment("Spell ids NPCs may never cast, e.g. \"irons_spellbooks:fireball\".")
+                .comment("Spell ids NPCs may never cast, e.g. \"irons_spellbooks:fireball\".",
+                        "A whole namespace may be named with a wildcard, e.g. \"traveloptics:*\".")
                 .translation(TKEY + "spellBlacklist")
-                .defineListAllowEmpty("spellBlacklist", () -> List.<String>of(), MagicNpcsConfig::isResourceId);
+                .defineListAllowEmpty("spellBlacklist", () -> List.<String>of(), MagicNpcsConfig::isSpellIdPattern);
         SPELL_WHITELIST = b
-                .comment("If non-empty, NPCs may ONLY cast spell ids in this list.")
+                .comment("If non-empty, NPCs may ONLY cast spell ids in this list.",
+                        "A whole namespace may be named with a wildcard, e.g. \"traveloptics:*\" - without one,",
+                        "a whitelist set here silently cancels spells.trustedNamespaces.")
                 .translation(TKEY + "spellWhitelist")
-                .defineListAllowEmpty("spellWhitelist", () -> List.<String>of(), MagicNpcsConfig::isResourceId);
+                .defineListAllowEmpty("spellWhitelist", () -> List.<String>of(), MagicNpcsConfig::isSpellIdPattern);
         ALLOW_UNVERIFIED_SPELLS = b
                 .comment("Let NPCs cast spells whose mob-casting behaviour Magic NPCs has not verified.",
                         "Magic NPCs ships a manifest of every Iron's spell it has checked against a real mob",
@@ -474,6 +512,27 @@ public final class MagicNpcsConfig {
                         "reported by /magicnpcs validate rather than mis-fired.")
                 .translation(TKEY + "allowUnverifiedSpells")
                 .define("allowUnverifiedSpells", false);
+        SPELL_TRUSTED_NAMESPACES = b
+                .comment("Spell namespaces to trust wholesale, e.g. \"traveloptics\" (no colon, no path).",
+                        "A spell from a trusted namespace that no manifest or override covers is treated as an",
+                        "aimed, direct-effect spell: the friendly-fire check uses the default CORRIDOR shape and",
+                        "the cast session supplies target data only when the caster happens to have a target.",
+                        "That is a claim about the namespace, not about the spell - a trusted area or player-only",
+                        "spell can still hit allies or do nothing. /magicnpcs validate flags each one",
+                        "[NAMESPACE_TRUSTED]; a datapack manifest (data/<namespace>/spell_manifests/*.json) is",
+                        "the way to state what each spell actually needs and silence the warning.")
+                .translation(TKEY + "trustedNamespaces")
+                .defineListAllowEmpty("trustedNamespaces", () -> List.<String>of(), MagicNpcsConfig::isNamespace);
+        SPELL_CAPABILITY_OVERRIDES = b
+                .comment("Per-spell capability statements, \"<namespace>:<path>=<CAPABILITY>\", e.g.",
+                        "\"traveloptics:tidal_lance=TARGET_ENTITY\". These outrank the datapack manifests and the",
+                        "built-in Iron's table, so this is the fastest way to fix one spell.",
+                        "Capabilities: DIRECT, TARGET_ENTITY, TARGET_AREA, GROUND_AOE_FORWARD, SUMMON,",
+                        "ADDON_DEFAULT, MULTI_TARGET, SPECIAL_PREPARATION, PLAYER_ONLY, UTILITY_NON_COMBAT,",
+                        "UNVERIFIED. The last five mark a spell as one a mob cannot usefully cast.")
+                .translation(TKEY + "capabilityOverrides")
+                .defineListAllowEmpty("capabilityOverrides", () -> List.<String>of(),
+                        CapabilityOverrides::isValidEntry);
         b.pop();
 
         b.push("recruits");
@@ -1049,16 +1108,70 @@ public final class MagicNpcsConfig {
                 || (SPEC.isLoaded() && LEGACY_DEBUG_LOGGING.get());
     }
 
-    /** @return whether a spell id passes the whitelist/blacklist filters. */
+    /**
+     * @return whether a spell id passes the whitelist/blacklist filters. Both lists accept an exact
+     *         {@code namespace:path} and a whole-namespace {@code namespace:*} wildcard; the matching
+     *         itself lives in the pure {@link SpellIdFilter}.
+     */
     public static boolean isAllowed(String spellId) {
         if (!SPEC.isLoaded()) {
             return true;
         }
         List<? extends String> whitelist = SPELL_WHITELIST.get();
-        if (!whitelist.isEmpty() && !whitelist.contains(spellId)) {
+        if (!whitelist.isEmpty() && !SpellIdFilter.matches(whitelist, spellId)) {
             return false;
         }
-        return !SPELL_BLACKLIST.get().contains(spellId);
+        return !SpellIdFilter.matches(SPELL_BLACKLIST.get(), spellId);
+    }
+
+    /**
+     * @return the namespaces {@code spells.trustedNamespaces} trusts wholesale. Empty (never null)
+     *         before the spec loads, so the resolver is safe to call from any lifecycle point.
+     */
+    public static Set<String> trustedNamespaces() {
+        Set<String> cached = trustedNamespacesCache;
+        if (cached != null) {
+            return cached;
+        }
+        if (!SPEC.isLoaded()) {
+            return Set.of();
+        }
+        Set<String> parsed = Set.copyOf(new ArrayList<String>(SPELL_TRUSTED_NAMESPACES.get()));
+        trustedNamespacesCache = parsed;
+        return parsed;
+    }
+
+    /**
+     * @return the parsed {@code spells.capabilityOverrides}. Parsed once per config load (a malformed
+     *         entry is logged and skipped) and empty before the spec loads.
+     */
+    public static Map<ResourceLocation, SpellCapability> capabilityOverrides() {
+        Map<ResourceLocation, SpellCapability> cached = capabilityOverridesCache;
+        if (cached != null) {
+            return cached;
+        }
+        if (!SPEC.isLoaded()) {
+            return Map.of();
+        }
+        CapabilityOverrides.Parsed parsed = CapabilityOverrides.parse(SPELL_CAPABILITY_OVERRIDES.get());
+        for (String problem : parsed.problems()) {
+            com.otectus.magicnpcs.MagicNpcs.LOGGER.warn(
+                    "spells.capabilityOverrides: {} - the entry is ignored.", problem);
+        }
+        capabilityOverridesCache = parsed.overrides();
+        return parsed.overrides();
+    }
+
+    /**
+     * Drop the parsed views of the list-valued spell settings, so the next read reflects the file.
+     * Called from the config load/reload handlers: re-reading a {@code ForgeConfigSpec} list is cheap,
+     * but re-parsing it on every spell lookup is not, and a stale cache would keep a corrected
+     * override out of the runtime until restart.
+     */
+    public static void invalidateCaches() {
+        trustedNamespacesCache = null;
+        capabilityOverridesCache = null;
+        attackGoalNamePatternsCache = null;
     }
 
     /**
@@ -1119,6 +1232,36 @@ public final class MagicNpcsConfig {
         return out;
     }
 
+    /**
+     * @return the compiled {@code general.attackGoalNamePatterns}. Compiled once per config load and
+     *         falling back to the defaults before the spec loads, so goal matching is safe at any
+     *         lifecycle point. An entry that somehow got past the validator is skipped, not fatal.
+     */
+    public static List<Pattern> attackGoalNamePatterns() {
+        List<Pattern> cached = attackGoalNamePatternsCache;
+        if (cached != null) {
+            return cached;
+        }
+        List<? extends String> raw = SPEC.isLoaded()
+                ? ATTACK_GOAL_NAME_PATTERNS.get()
+                : DEFAULT_ATTACK_GOAL_NAME_PATTERNS;
+        List<Pattern> compiled = new ArrayList<>(raw.size());
+        for (String s : raw) {
+            try {
+                compiled.add(Pattern.compile(s));
+            } catch (PatternSyntaxException e) {
+                com.otectus.magicnpcs.MagicNpcs.LOGGER.warn(
+                        "general.attackGoalNamePatterns: \"{}\" is not a valid regex ({}) - the entry is ignored.",
+                        s, e.getDescription());
+            }
+        }
+        List<Pattern> result = List.copyOf(compiled);
+        if (SPEC.isLoaded()) {
+            attackGoalNamePatternsCache = result;
+        }
+        return result;
+    }
+
     /** The Iron's cast types a generated school pool may include, upper-cased. */
     public static List<String> allowedCastTypes() {
         if (!SPEC.isLoaded()) {
@@ -1131,8 +1274,48 @@ public final class MagicNpcsConfig {
         return out.isEmpty() ? List.of("INSTANT") : out;
     }
 
+    /** A regex the runtime can actually compile; an invalid one would silently match nothing. */
+    private static boolean isRegex(Object o) {
+        if (!(o instanceof String s) || s.isBlank()) {
+            return false;
+        }
+        try {
+            Pattern.compile(s);
+            return true;
+        } catch (PatternSyntaxException e) {
+            return false;
+        }
+    }
+
     private static boolean isResourceId(Object o) {
         return o instanceof String s && ResourceLocation.tryParse(s) != null;
+    }
+
+    /** A spell id, or a whole-namespace wildcard such as {@code traveloptics:*}. */
+    private static boolean isSpellIdPattern(Object o) {
+        if (!(o instanceof String s)) {
+            return false;
+        }
+        if (s.endsWith(":*")) {
+            return isNamespace(s.substring(0, s.length() - 2));
+        }
+        return ResourceLocation.tryParse(s) != null;
+    }
+
+    /** A bare namespace: the characters a resource-location namespace allows, and no colon. */
+    private static boolean isNamespace(Object o) {
+        if (!(o instanceof String s) || s.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            boolean allowed = (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')
+                    || ch == '_' || ch == '.' || ch == '-';
+            if (!allowed) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean isRarity(Object o) {

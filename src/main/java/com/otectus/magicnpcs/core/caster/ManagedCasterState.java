@@ -42,9 +42,19 @@ public final class ManagedCasterState {
     private boolean channelling;
     private int nextDecisionTick;
     private boolean idleScheduled;
+    private int lastGoalHeartbeat = Integer.MIN_VALUE;
     private ReconcileResult lastResult;
 
     private ManagedCasterState() {}
+
+    /**
+     * An unregistered, empty state for unit tests only — the constructor is private and
+     * {@link #of(Mob)} needs a real {@code Mob}. Never placed in the static map, so a test can
+     * exercise the decision cadence without a world.
+     */
+    static ManagedCasterState forTest() {
+        return new ManagedCasterState();
+    }
 
     /** @return the state for {@code mob}, creating an empty one on first use. */
     public static ManagedCasterState of(Mob mob) {
@@ -158,6 +168,32 @@ public final class ManagedCasterState {
     public void pullDecisionForward(int at) {
         this.nextDecisionTick = Math.min(this.nextDecisionTick, at);
         this.idleScheduled = false;
+    }
+
+    // --- goal heartbeat -------------------------------------------------------------------------
+
+    /**
+     * Stamp {@code now} as the last tick on which the injected casting goal was evaluated or ticked
+     * by the mob's {@code GoalSelector}.
+     *
+     * <p>Lives on the state rather than on the goal for the same reason {@link #nextDecisionTick()}
+     * does: a {@code /reload} removes and recreates the goal, and a heartbeat that reset with it
+     * would report every reconciled caster as never evaluated.
+     */
+    public void heartbeat(int now) {
+        this.lastGoalHeartbeat = now;
+    }
+
+    /**
+     * @return ticks since the casting goal was last evaluated or ticked, or
+     *         {@link Integer#MAX_VALUE} if it never has been. A large and growing age means the
+     *         mob's AI is not running the vanilla goal selector at all.
+     */
+    public int goalHeartbeatAge(int now) {
+        if (lastGoalHeartbeat == Integer.MIN_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return Math.max(0, now - lastGoalHeartbeat);
     }
 
     // --- native attack lease ------------------------------------------------------------------

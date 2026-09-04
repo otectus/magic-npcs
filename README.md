@@ -24,10 +24,12 @@ Recruits and loads cleanly if either is absent.
 - Mana and cooldowns are owned by Magic NPCs (Iron's does not run its player-side
   economy for foreign mobs); mana regenerates each tick from `MANA_REGEN`. Both are charged
   once, at the moment Iron's accepts a cast — a spell that is refused costs nothing.
-- Spells are cast only when Magic NPCs has **verified** that a mob gets their designed
-  behaviour. The check is a reviewed per-spell manifest derived from the Iron's jar this
-  build was tested against; anything outside it is *unverified* and skipped unless you opt
-  in with `spells.allowUnverifiedSpells`.
+- Spells follow a **layered support model** with five tiers of verification: (1) operator
+  config overrides (`spells.capabilityOverrides`); (2) datapack manifests (`data/<namespace>/spell_manifests/*.json`);
+  (3) the built-in Iron's table (reviewed against this build's Iron's version); (4) namespace trust
+  (`spells.trustedNamespaces`, weak claim, not verified); (5) nothing (unverified, skipped by default).
+  An Iron's add-on spell starts as UNVERIFIED and can be enabled through a manifest, namespace trust,
+  or the global `spells.allowUnverifiedSpells` opt-in. See [Iron's add-ons guide](docs/compat/irons-addons.md).
 
 ### Villager Recruits (optional)
 
@@ -505,6 +507,29 @@ Three ways, in increasing order of bluntness:
 `/magicnpcs validate` and `/magicnpcs loadout id <entity_type>` both report a type that has been
 switched off, so it never looks like a silent failure.
 
+### 11b. Per-spell pacing: native cast time, cooldown, and wind-up
+
+Every spell entry can override its timing with per-spell fields under `[balance]` and `[targeting]`.
+See [`docs/loadouts/README.md`](docs/loadouts/README.md) for the complete guide, including examples
+and the Gravity Fissure worked example. In summary:
+
+- **`cooldown`** and **`cooldown_multiplier`** — explicit cooldown (ticks) or a multiplier on Iron's
+  default. `cooldown` always wins when both are set. Default: `balance.cooldownMultiplier` (1.0 means
+  use Iron's default). `cooldown` is the clearest choice for modpack authors.
+- **`cast_time`** (0.9.0+) — absolute Iron's native cast duration, in ticks. Highest precedence;
+  overrides `cast_time_multiplier`. Only applies to LONG/CONTINUOUS spells; INSTANT/NONE ignore it.
+- **`cast_time_multiplier`** (0.9.0+) — scales Iron's effective cast time. `0.5` = twice as fast.
+  Applied after caster-side modifiers. Ignored if `cast_time` is set or if the spell is INSTANT/NONE.
+- **`windup`** — Magic NPCs' own pre-cast aim delay before Iron's starts casting. `windup: 0` removes
+  only that delay; it cannot shorten Iron's native cast. The two are separate phases: windup → Iron's
+  cast/channel → effect. Default: `targeting.castWindupTicks`.
+
+The **`/magicnpcs validate`** command reports error codes for malformed values:
+- `CAST_TIME_NEGATIVE` — `cast_time` is less than zero (file-level error, rejects the loadout).
+- `CAST_TIME_MULTIPLIER_INVALID` — `cast_time_multiplier` is not finite or is negative (file-level error).
+- `CAST_TIME_ABSOLUTE_WINS` — both `cast_time` and `cast_time_multiplier` are set (info, no error).
+- `CAST_TIME_IGNORED` — either field is set on an INSTANT or NONE spell; both are ignored at runtime.
+
 ### 12. Mobs with their own ranged attack AI
 
 Since 0.6.0 the casting goal declares **no** `GoalSelector` control flags, so it runs *alongside* a
@@ -522,7 +547,7 @@ Set `"native_attack"` on a loadout to change that:
 | `"yield"` | Only cast while none of the mob's own attack goals is running. |
 
 Extend the set of goal classes those two policies recognise with
-`general.suppressibleAttackGoals` (simple class names). `"goal_priority"` overrides
+`general.suppressibleAttackGoals` (simple class names) for exact matching, or `general.attackGoalNamePatterns` (case-sensitive regexes) for pattern matching. `"goal_priority"` overrides
 `general.castingGoalPriority` for one entity type.
 
 #### Making a mob a real caster
@@ -572,14 +597,14 @@ syntax error. `<angle brackets>` are placeholders; do not type the brackets.
 | `/magicnpcs why <targets>` | **"why is this specific mob, right now, not casting?"** — injection, reconciliation state, the goal environment, state gates, target/line of sight, mana, and a per-spell table with the first blocker for each entry (including *which* entity blocks a friendly-fire check) |
 | `/magicnpcs loadout entity <targets>` | which loadout a mob **would** resolve to, which one its goal is **actually running**, and `STALE` when those differ |
 | `/magicnpcs loadout id <entity_type>` | every loadout declared for a type, plus compat/disable warnings and any file that declares it but never became active |
-| `/magicnpcs validate` | every **discovered** loadout file and its status — active, shadowed, suppressed, or rejected — with the JSON pointer of each problem |
+| `/magicnpcs validate` | every **discovered** loadout file and its status — active, shadowed, suppressed, rejected, or skipped (mod absent) — with the JSON pointer of each problem; counts by status including `Skipped (mod absent): N`; a skipped file prints `SKIPPED (mod absent)` in grey with its INFO reason |
 | `/magicnpcs validate resource <resource_id>` | one loadout file in full (`my_magic:skeleton` for `data/my_magic/spellcasters/skeleton.json`) |
 | `/magicnpcs validate id <entity_type>` | every loadout file targeting one entity type, whatever its status |
-| `/magicnpcs config` | effective settings, the real config file paths, dependency versions, and reconciliation state |
+| `/magicnpcs config` | effective settings, the real config file paths, dependency versions, reconciliation state, and manifest status (`manifest: <rows> rows, <n> unregistered, <m> unlisted` or `manifest: not yet reconciled`); also includes `skipped (mod absent): N` when applicable |
 | `/magicnpcs reconcile [targets]` | re-evaluate managed casting state against the current data, now |
 | `/magicnpcs school pool [school]` | what a magic school's generated pool contains, and the exact filter that dropped each spell |
 | `/magicnpcs school info <targets>` | each NPC's assigned school, its mode (`AUTO` / `MANUAL_SCHOOL` / `MANUAL_DISABLED`) **and which source is actually driving it** |
-| `/magicnpcs spells [filter]` | the valid Iron's spell ids, and whether each is supported, unsupported, or unverified for mob casting |
+| `/magicnpcs spells [filter]` | the valid Iron's spell ids with provenance (`V`erified, config `O`verride, manifest `M`, namespace-`T`rusted, `U`nverified) showing which layer decided each spell's mob-cast capability; unverified rows end with " — unverified: trust the namespace or add a manifest row (docs/compat/irons-addons.md)" |
 
 Copy-paste examples for the nearest skeleton:
 
@@ -603,6 +628,21 @@ all — and it says nothing about whether a particular mob is casting. That seco
 file was invisible to it and "no issues found" could coexist with a broken pack; it now reports every
 discovered file, including the rejected ones.
 
+**Casting driver observability (0.9.0+).** When `/magicnpcs why` shows `casting driver: goal` and
+`goal heartbeat: never`, the goal exists but has never been evaluated — likely a modded mob whose AI
+bypasses the vanilla goal selector. If `goal heartbeat: N tick(s) ago` exceeds ~40 ticks, the blocker
+`[GOAL_NOT_EVALUATED]` appears: the goal is installed but the mob's AI is not running it. This is the
+signal to pack authors that this mob type needs special handling (a mod-aware adapter or a fallback
+cast driver). Magic NPCs instruments this detection for known mods; file an issue if your mob never
+casts and `/magicnpcs why` shows a high heartbeat age.
+
+The `/magicnpcs why` output also includes the **goal table** (sorted by priority then class name) with
+a `native-attack` column showing `exact` (matched by class name), `pattern:<regex>` (matched by pattern),
+or `-` (no match). Below the table, `candidate attack goals not matched: <names>` lists goals that look
+like native attack but were not matched, with a hint to add them to `general.suppressibleAttackGoals` or
+`general.attackGoalNamePatterns`. The spell-eligibility table now shows which layer decided each spell's
+mob-cast capability (provenance column).
+
 ### 14. See also
 
 - **Shipped loadouts** (great references) — bundled in the jar under
@@ -614,6 +654,8 @@ discovered file, including the rejected ones.
 - [`docs/loadouts/README.md`](docs/loadouts/README.md) — copy-paste examples for optional NPC mods,
   plus a ready [`witch.json`](docs/loadouts/examples/witch.json) and
   [`skeleton.json`](docs/loadouts/examples/skeleton.json).
+- [`docs/compat/irons-addons.md`](docs/compat/irons-addons.md) — guide to enabling Iron's Spells add-on
+  spells via datapack manifests, namespace trust, and auditing (offline heuristic + in-game RESOLVE/CAST).
 - [`docs/schools.md`](docs/schools.md) — the per-NPC magic-school system.
 - [`docs/irons_spell_ids.md`](docs/irons_spell_ids.md) — valid Iron's spell ids by school.
 - [`docs/mob-friendly-spells.md`](docs/mob-friendly-spells.md) — which spells work well on mobs,
@@ -736,7 +778,7 @@ Magic NPCs has **two** config files (0.6.0; see
 Per-world gameplay settings:
 
 - **general** — `enableSpellcasting`, `castingGoalPriority`, `castingGoalUsesLookFlag`,
-  `disabledEntityTypes`, `suppressibleAttackGoals`
+  `disabledEntityTypes`, `suppressibleAttackGoals`, `attackGoalNamePatterns`
 - **balance** — `manaMultiplier`, `cooldownMultiplier`, `regenMultiplier`,
   `decisionIntervalTicks`, `castChance`, `minCooldownTicks`, `supportHealthThreshold`,
   `supportOutOfCombat`, `supportOutOfCombatIntervalTicks`,
@@ -751,7 +793,9 @@ Per-world gameplay settings:
   see [Reactive conditions](#9-reactive-conditions))
 - **feedback** — `telegraphs`, `schoolParticles`, `telegraphGlow`, `telegraphVolume`,
   `minDangerTier` (the cast "tell" shown during a caster's wind-up)
-- **spells** — `spellBlacklist`, `spellWhitelist`, `allowUnverifiedSpells`
+- **spells** — `spellBlacklist` and `spellWhitelist` now accept `namespace:*` wildcards;
+  `trustedNamespaces` (namespace list), `capabilityOverrides` (spell id to capability map),
+  and the global `allowUnverifiedSpells` opt-in for unverified add-on spells
 - **recruits** — `enabled`, `manaPerLevel`
 - **schools** — magic-school assignment (`enableSchools`, `allowedSchools`, `maxRarity`,
   `maxSpellLevel`, `spellsPerSchool`, `allowedCastTypes`, weighting, base mana,
@@ -801,6 +845,12 @@ classes). The shipped loadouts + the `spell_focuses` tag are generated (committe
 `./gradlew runData`. For an in-dev runtime with Iron's + Recruits, see
 [`docs/dev-runtime.md`](docs/dev-runtime.md). The Recruits jar belongs in `libs/`
 (see that doc); it is compile-only and never bundled or committed.
+
+**Dev profiles** are available under `-P`:
+- **`-PdevRuntime`** — full Iron's + Recruits + Easy NPC + CustomNPCs stack for casting GameTests. Requires fixture jars in `libs/`.
+- **`-PeasyNpcRuntime`** — Easy NPC alone (lightweight isolation test; casting dormant).
+- **`-PcustomNpcsRuntime`** — CustomNPCs alone (lightweight isolation test; casting dormant).
+- **`-PluminousRuntime`** (0.9.0+) — LUMINOUS: BEASTS for Luminous mob integration verification. runtimeOnly → never bundled. Additive to `-PdevRuntime`. All-Rights-Reserved; nothing under `src/` references it.
 
 ## License
 

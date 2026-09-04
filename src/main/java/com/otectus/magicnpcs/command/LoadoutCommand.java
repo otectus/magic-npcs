@@ -31,8 +31,10 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * {@code /magicnpcs loadout …} and {@code /magicnpcs validate …} — inspect the effective spellcaster
@@ -267,9 +269,10 @@ public final class LoadoutCommand {
         src.sendSuccess(() -> Component.literal("Magic NPCs validation (catalog generation "
                 + catalog.generation() + ")").withStyle(ChatFormatting.AQUA), false);
         src.sendSuccess(() -> Component.literal(String.format(Locale.ROOT,
-                        "Discovered: %d  Parsed: %d  Active: %d  Shadowed: %d  Suppressed: %d  Rejected: %d",
+                        "Discovered: %d  Parsed: %d  Active: %d  Shadowed: %d  Suppressed: %d  "
+                                + "Rejected: %d  Skipped (mod absent): %d",
                         counts.discovered(), counts.parsed(), counts.active(), counts.shadowed(),
-                        counts.suppressed(), counts.rejected()))
+                        counts.suppressed(), counts.rejected(), counts.inapplicable()))
                 .withStyle(counts.rejected() > 0 ? ChatFormatting.RED : ChatFormatting.WHITE), false);
 
         int errors = 0;
@@ -285,8 +288,9 @@ public final class LoadoutCommand {
             }
         }
         // Spell-level checks need Iron's, so they are not part of the parse record.
-        int spellIssues = validateSpells(src, catalog);
-        errors += spellIssues;
+        int[] spellIssues = validateSpells(src, catalog);
+        errors += spellIssues[0];
+        warnings += spellIssues[1];
 
         final int totalErrors = errors;
         final int totalWarnings = warnings;
@@ -361,7 +365,8 @@ public final class LoadoutCommand {
      */
     private static int printRecord(CommandSourceStack src, LoadoutRecord record, boolean always) {
         boolean interesting = always || !record.problems().isEmpty()
-                || record.status() == LoadoutRecord.Status.REJECTED;
+                || record.status() == LoadoutRecord.Status.REJECTED
+                || record.status() == LoadoutRecord.Status.INAPPLICABLE;
         if (!interesting) {
             return 0;
         }
@@ -370,8 +375,12 @@ public final class LoadoutCommand {
             case SHADOWED -> ChatFormatting.GRAY;
             case SUPPRESSED -> ChatFormatting.DARK_GRAY;
             case REJECTED -> ChatFormatting.RED;
+            // Grey, like the other "did nothing" outcomes: an absent mod is not a failed file.
+            case INAPPLICABLE -> ChatFormatting.GRAY;
         };
-        src.sendSuccess(() -> Component.literal(record.status() + "  " + record.describeSource()
+        String label = record.status() == LoadoutRecord.Status.INAPPLICABLE
+                ? "SKIPPED (mod absent)" : record.status().toString();
+        src.sendSuccess(() -> Component.literal(label + "  " + record.describeSource()
                         + (record.entityType() == null ? "" : "  → " + record.effectiveKey()))
                 .withStyle(colour), false);
         int printed = 0;
@@ -393,42 +402,87 @@ public final class LoadoutCommand {
     }
 
     /** Iron's-side checks over the active loadouts: unknown/disabled/unsupported spells and ranges. */
-    private static int validateSpells(CommandSourceStack src, LoadoutCatalog catalog) {
-        int issues = 0;
+    /** @return {@code {fatal, warning}} counts, so the result line tallies what was printed. */
+    private static int[] validateSpells(CommandSourceStack src, LoadoutCatalog catalog) {
+        int fatalIssues = 0;
+        int warnIssues = 0;
+        // Counts by provenance, plus how many entries the whitelist excludes: a non-empty whitelist
+        // without a namespace wildcard silently cancels spells.trustedNamespaces, and that has to be
+        // visible here rather than only as "the mob never casts".
+        Map<String, Integer> byProvenance = new LinkedHashMap<>();
+        int filtered = 0;
         for (LoadoutRecord record : catalog.records()) {
             if (record.status() != LoadoutRecord.Status.ACTIVE || record.loadout() == null) {
                 continue;
             }
             for (LoadoutEntry spell : record.loadout().spells()) {
+                if (!LoadoutManager.liveChecks().modLoaded(spell.spell().getNamespace())) {
+                    // The parser already dropped these entries; a surviving one can only come from an
+                    // in-code loadout. Either way "the mod is not installed" is information, not a fault.
+                    src.sendSuccess(() -> Component.literal("INFO  " + record.resourceId()
+                                    + " (pack " + record.packId() + ") /spells: " + spell.spell()
+                                    + " — skipped: mod not installed")
+                            .withStyle(ChatFormatting.DARK_GRAY), false);
+                    continue;
+                }
                 SpellDiagnostic d = IronsBridge.diagnose(spell.spell().toString());
+                byProvenance.merge(d.provenance() == null ? "UNVERIFIED" : d.provenance(), 1, Integer::sum);
+                if (d.exists() && !MagicNpcsConfig.isAllowed(d.id())) {
+                    filtered++;
+                }
                 String problem = spellProblem(d, spell);
                 if (problem == null) {
                     continue;
                 }
-                issues++;
                 boolean fatal = !d.exists() || !d.enabled() || !d.willCast();
+                if (fatal) {
+                    fatalIssues++;
+                } else {
+                    warnIssues++;
+                }
                 src.sendSuccess(() -> Component.literal((fatal ? "ERROR " : "WARN  ")
                                 + record.resourceId() + " (pack " + record.packId() + ") /spells: "
                                 + spell.spell() + " — " + problem)
                         .withStyle(fatal ? ChatFormatting.RED : ChatFormatting.YELLOW), false);
             }
         }
-        return issues;
+        StringBuilder summary = new StringBuilder("Spell support: ");
+        if (byProvenance.isEmpty()) {
+            summary.append("no spells in any active loadout");
+        } else {
+            boolean first = true;
+            for (Map.Entry<String, Integer> e : byProvenance.entrySet()) {
+                summary.append(first ? "" : ", ").append(e.getValue()).append(' ')
+                        .append(e.getKey().toLowerCase(Locale.ROOT));
+                first = false;
+            }
+        }
+        final int excluded = filtered;
+        summary.append("; ").append(excluded)
+                .append(" excluded by spells.spellWhitelist/spellBlacklist");
+        final String summaryText = summary.toString();
+        src.sendSuccess(() -> Component.literal(summaryText)
+                .withStyle(excluded > 0 ? ChatFormatting.YELLOW : ChatFormatting.DARK_GRAY), false);
+        return new int[] {fatalIssues, warnIssues};
     }
 
     /** @return a short problem string for a loadout spell, or {@code null} if it looks fine. */
     private static String spellProblem(SpellDiagnostic d, LoadoutEntry spell) {
         if (!d.exists()) {
             return "unknown spell id (run /magicnpcs spells)"
-                    + (spell.spell().getNamespace().equals("minecraft")
-                            ? " — did you mean irons_spellbooks:" + spell.spell().getPath() + "?" : "");
+                    + (d.fix() != null ? " — " + d.fix() : "");
         }
         if (!d.enabled()) {
             return "spell is disabled in Iron's config";
         }
         if (!d.willCast()) {
-            return (d.unverified() ? "UNVERIFIED for mob casting: " : "not castable by a mob: ")
-                    + d.unsupportedReason();
+            return (d.unverified() ? "UNVERIFIED (" + d.provenance() + ") for mob casting: "
+                    : "not castable by a mob: ")
+                    + d.unsupportedReason() + (d.fix() != null ? " — " + d.fix() : "");
+        }
+        if (d.namespaceTrusted()) {
+            return "namespace-trusted, not verified: CORRIDOR friendly-fire geometry and no cast-data "
+                    + "guarantee; add it to a spell manifest to silence this [NAMESPACE_TRUSTED]";
         }
         if (d.requiresTarget() && spell.role() == LoadoutEntry.Role.SUPPORT) {
             return "needs a target but is a SUPPORT (self-cast) spell — set role=attack";
@@ -438,6 +492,11 @@ public final class LoadoutCommand {
                     "min_range=%.1f is greater than max_range=%.1f — no distance can ever satisfy both, "
                             + "so this spell is never selectable",
                     spell.minRange(), spell.maxRange());
+        }
+        if ((spell.castTimeTicks() != null || spell.castTimeMultiplier() != null)
+                && ("INSTANT".equals(d.castType()) || "NONE".equals(d.castType()))) {
+            return "cast_time and cast_time_multiplier are ignored because " + spell.spell()
+                    + " is " + d.castType() + " [CAST_TIME_IGNORED]";
         }
         if ("GROUND_AOE_FORWARD".equals(d.category()) && spell.maxRange() > 8.0) {
             return String.format(Locale.ROOT, "forward ground-AoE with max_range=%.1f — recommend ≤5.0 "
@@ -458,9 +517,15 @@ public final class LoadoutCommand {
                 spell.spell(), spell.level(), spell.role().name().toLowerCase(Locale.ROOT), spell.weight(),
                 describeRange(spell), spell.safetyRadius(),
                 spell.requireHeldItem() ? " · needs-held-item" : "");
-        String detail = String.format(Locale.ROOT, "      %s · %s · %s · cd %dt%s%s",
+        // Cast-time overrides are printed only when the author set one, so a loadout on Iron's own
+        // timing reads exactly as it did before 0.9.0.
+        String castTime = spell.castTimeTicks() != null ? " · cast_time=" + spell.castTimeTicks() + "t" : "";
+        String castTimeMult = spell.castTimeMultiplier() != null
+                ? " · cast_time_multiplier=" + spell.castTimeMultiplier() + "x" : "";
+        String detail = String.format(Locale.ROOT, "      %s · %s · %s · cd %dt%s%s%s%s",
                 d.exists() ? d.category().toLowerCase(Locale.ROOT) : "UNKNOWN",
                 d.castType().toLowerCase(Locale.ROOT), d.support().toLowerCase(Locale.ROOT), cooldown,
+                castTime, castTimeMult,
                 d.exists() && !d.enabled() ? " · DISABLED" : "",
                 d.requiresTarget() ? " · needs-target" : "");
         String skip = liveSkipReason(d, spell, target, mob);

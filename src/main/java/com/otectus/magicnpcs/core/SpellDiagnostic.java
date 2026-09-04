@@ -20,6 +20,12 @@ package com.otectus.magicnpcs.core;
  * @param unsupportedReason a short, actionable explanation when {@code support} is not SUPPORTED
  * @param requiresTarget  true if it needs a target entity (the mob must have a target to cast it)
  * @param baseCooldownTicks Iron's default cooldown in ticks (before loadout/config overrides)
+ * @param provenance      which layer decided this spell's capability - {@code VERIFIED},
+ *                        {@code OVERRIDE}, {@code MANIFEST}, {@code NAMESPACE_TRUSTED} or
+ *                        {@code UNVERIFIED}. Since 0.9.0 support is layered, so "why is it
+ *                        unsupported" and "where do I change it" are separate questions
+ * @param fix             the concrete next step - a "did you mean" for an unknown id, or the keys and
+ *                        files that would change the verdict - or {@code null} when there is none
  */
 public record SpellDiagnostic(
         String id,
@@ -31,7 +37,9 @@ public record SpellDiagnostic(
         boolean willCast,
         String unsupportedReason,
         boolean requiresTarget,
-        int baseCooldownTicks
+        int baseCooldownTicks,
+        String provenance,
+        String fix
 ) {
     /** @return true when a mob may actually cast this spell — the flag callers should gate on. */
     public boolean supportedForMob() {
@@ -41,5 +49,14 @@ public record SpellDiagnostic(
     /** @return true when the spell is outside the verified manifest for this build. */
     public boolean unverified() {
         return "UNVERIFIED".equals(support);
+    }
+
+    /**
+     * @return true when this spell is castable only because its namespace is trusted - no one has
+     *         stated what it actually needs, so it gets the default corridor geometry and no cast-data
+     *         guarantee.
+     */
+    public boolean namespaceTrusted() {
+        return "NAMESPACE_TRUSTED".equals(provenance);
     }
 }

@@ -6,8 +6,10 @@ import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import com.otectus.magicnpcs.core.SchoolData;
 import com.otectus.magicnpcs.core.adapter.NpcAdapter;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
+import com.otectus.magicnpcs.core.caster.CasterFacing;
 import com.otectus.magicnpcs.core.caster.MagicNpcEvents;
 import com.otectus.magicnpcs.core.caster.ManagedCasterState;
+import com.otectus.magicnpcs.core.caster.SpellEligibility;
 import com.otectus.magicnpcs.core.feedback.Telegraphs;
 import com.otectus.magicnpcs.core.loadout.CastCondition;
 import com.otectus.magicnpcs.core.loadout.CooldownResolver;
@@ -48,7 +50,7 @@ import java.util.List;
  * <p><b>Scheduling.</b> The goal declares no {@link Flag} by default, so it runs <em>alongside</em> a
  * mob's own attack AI rather than fighting it for the LOOK lock — the fix for both "the witch never
  * casts" and "the skeleton casts instead of shooting" (ADR 0002). It does not need LOOK: it snaps its
- * own rotation in {@link #snapFacing} at cast time, because {@code LookControl} applies too late.
+ * own rotation through {@link CasterFacing} at cast time, because {@code LookControl} applies too late.
  *
  * <p><b>Combat state is not owned by this object.</b> Cooldowns and the decision deadline live in
  * {@link ManagedCasterState}, keyed by entity rather than by goal instance. Through 0.6.1 they were
@@ -121,6 +123,7 @@ public class NpcSpellAttackGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        state().heartbeat(mob.tickCount); // before every early return, or an inert caster reads as never evaluated
         if (spells.isEmpty()) {
             return false;
         }
@@ -145,7 +148,8 @@ public class NpcSpellAttackGoal extends Goal {
             // Out of combat only SUPPORT is eligible, and only when the feature is on. Space the next
             // idle evaluation up front so a caster with nothing to do costs one check per cadence
             // rather than one per goal tick.
-            if (!hasSupportSpell || !MagicNpcsConfig.SUPPORT_OUT_OF_COMBAT.get()) {
+            if (!SpellEligibility.outOfCombatPathOpen(
+                    hasSupportSpell, MagicNpcsConfig.SUPPORT_OUT_OF_COMBAT.get())) {
                 return false;
             }
             scheduleNextDecision(idleInterval());
@@ -293,6 +297,7 @@ public class NpcSpellAttackGoal extends Goal {
 
     @Override
     public void tick() {
+        state().heartbeat(mob.tickCount);
         if (chosen == null) {
             return;
         }
@@ -384,10 +389,15 @@ public class NpcSpellAttackGoal extends Goal {
             // setLookAt here is stale at cast time — Iron's projectile spells read getLookAngle()
             // during onCast, and its target-seeking pre-cast helpers raycast along it. Snap the mob's
             // rotation at the target NOW so the spell fires on-aim.
-            snapFacing(target);
+            CasterFacing.snap(mob, target);
+            if (MagicNpcsConfig.debugLogging()) {
+                MagicNpcs.LOGGER.info("[aim] {} snapped to yaw={} pitch={} before casting {}",
+                        EntityType.getKey(mob.getType()), String.format("%.1f", mob.getYRot()),
+                        String.format("%.1f", mob.getXRot()), chosen.entry().spell());
+            }
         }
-        MobCastSession.Start start =
-                MobCastSession.begin(mob, target, chosen.spell(), effectiveLevel(chosen));
+        MobCastSession.Start start = MobCastSession.begin(mob, target, chosen.spell(),
+                effectiveLevel(chosen), resolveCastTime(chosen), MagicNpcCastEvent.CastSource.AI);
         if (!start.started()) {
             MagicNpcEvents.postFailed(mob, chosen.entry().spell(), effectiveLevel(chosen), target,
                     MagicNpcCastEvent.CastSource.AI, start.refusal() == null
@@ -423,35 +433,6 @@ public class NpcSpellAttackGoal extends Goal {
         this.chosen = null;
         this.target = null;
         this.windupRemaining = 0;
-    }
-
-    /**
-     * Force the caster's yaw/pitch (head + body) straight at the target's eyes immediately, so the
-     * look vector Iron's reads in {@code onCast} points at the target this very tick.
-     * {@code LookControl} defers its rotation until after the goal tick, so it cannot be relied on for
-     * the cast frame; we set the rotations directly (and the {@code *O} previous-frame values to avoid
-     * an interpolation artifact).
-     */
-    private void snapFacing(LivingEntity t) {
-        double dx = t.getX() - mob.getX();
-        double dz = t.getZ() - mob.getZ();
-        double dy = t.getEyeY() - mob.getEyeY();
-        double horiz = Math.sqrt(dx * dx + dz * dz);
-        float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
-        float pitch = (float) -Math.toDegrees(Math.atan2(dy, horiz));
-        mob.setYRot(yaw);
-        mob.yRotO = yaw;
-        mob.yBodyRot = yaw;
-        mob.yBodyRotO = yaw;
-        mob.setYHeadRot(yaw);
-        mob.yHeadRotO = yaw;
-        mob.setXRot(pitch);
-        mob.xRotO = pitch;
-        if (MagicNpcsConfig.debugLogging()) {
-            MagicNpcs.LOGGER.info("[aim] {} snapped to yaw={} pitch={} before casting {}",
-                    EntityType.getKey(mob.getType()), String.format("%.1f", yaw), String.format("%.1f", pitch),
-                    chosen.entry().spell());
-        }
     }
 
     /**
@@ -504,6 +485,7 @@ public class NpcSpellAttackGoal extends Goal {
         boolean canAttackTarget = !outOfCombat && npcAdapter.canCastAt(mob, t);
         boolean hasLineOfSight = !outOfCombat && mob.getSensing().hasLineOfSight(t);
         boolean reactive = MagicNpcsConfig.REACTIVE_CASTING_ENABLED.get();
+        boolean lineOfSightOk = !MagicNpcsConfig.REQUIRE_LINE_OF_SIGHT.get() || hasLineOfSight;
         ManagedCasterState state = state();
 
         // Pass A: everything except the friendly-fire corridor, which is expensive and shared.
@@ -523,36 +505,16 @@ public class NpcSpellAttackGoal extends Goal {
                 continue; // per-spell require_held_item
             }
             CastCondition cond = reactive ? e.condition() : null;
-            boolean hasCond = cond != null && !cond.isEmpty();
-            boolean condMatched = false;
-            if (e.role() == LoadoutEntry.Role.SUPPORT) {
-                if (hasCond) {
-                    if (!cond.evaluate(mob, t, npcAdapter)) {
-                        continue; // reactive condition replaces the default "when hurt" gate
-                    }
-                    if (outOfCombat && !cond.hasSelfHealthGate() && !hurt) {
-                        continue; // anti-loop floor: idle support still requires being hurt
-                    }
-                    condMatched = true;
-                } else if (!hurt) {
-                    continue; // self-cast support only when threatened
-                }
-            } else { // ATTACK — never selectable without a target
-                if (outOfCombat || !canAttackTarget) {
-                    continue;
-                }
-                if (distSqr < e.minRange() * e.minRange() || distSqr > e.maxRange() * e.maxRange()) {
-                    continue; // target out of range
-                }
-                if (MagicNpcsConfig.REQUIRE_LINE_OF_SIGHT.get() && !hasLineOfSight) {
-                    continue; // can't see the target through blocks
-                }
-                if (hasCond) {
-                    if (!cond.evaluate(mob, t, npcAdapter)) {
-                        continue; // reactive condition (e.g. execute below target HP, AoE when swarmed)
-                    }
-                    condMatched = true;
-                }
+            boolean inRange = distSqr >= e.minRange() * e.minRange()
+                    && distSqr <= e.maxRange() * e.maxRange();
+            SpellEligibility.Verdict verdict = SpellEligibility.roleGate(
+                    e.role(), outOfCombat, hurt, cond, () -> cond.evaluate(mob, t, npcAdapter),
+                    canAttackTarget, inRange, lineOfSightOk);
+            if (verdict == SpellEligibility.Verdict.SKIP) {
+                continue;
+            }
+            boolean condMatched = verdict == SpellEligibility.Verdict.ELIGIBLE_CONDITION_MATCHED;
+            if (e.role() == LoadoutEntry.Role.ATTACK) {
                 anyAttack = true;
                 maxSafety = Math.max(maxSafety, e.safetyRadius());
             }
@@ -712,6 +674,16 @@ public class NpcSpellAttackGoal extends Goal {
         return w != null ? w : MagicNpcsConfig.CAST_WINDUP_TICKS.get();
     }
 
+    /**
+     * Precedence: explicit per-spell {@code cast_time} > per-spell {@code cast_time_multiplier} >
+     * Iron's own effective cast time. Resolved per cast and passed to the session; the shared spell
+     * object is never modified.
+     */
+    private int resolveCastTime(Resolved r) {
+        return SpellCompat.effectiveCastTime(r.spell(), effectiveLevel(r), mob,
+                r.entry().castTimeTicks(), r.entry().castTimeMultiplier());
+    }
+
     /** Precedence: explicit per-spell ticks > per-spell multiplier > global multiplier; always floored. */
     private int resolveCooldown(Resolved r) {
         return resolveCooldown(r.entry(), r.spell());
@@ -780,6 +752,11 @@ public class NpcSpellAttackGoal extends Goal {
 
     // --- Diagnostics seam (/magicnpcs why) ---
 
+    /** @return true while a wind-up telegraph is glowing on the caster (out-of-combat casts play none). */
+    boolean telegraphApplied() {
+        return glowApplied;
+    }
+
     /** The loadout this goal was built from — the authoritative answer, not a re-resolution. */
     public SpellcasterLoadout loadout() {
         return loadout;
@@ -842,6 +819,36 @@ public class NpcSpellAttackGoal extends Goal {
             }
         }
         return 0;
+    }
+
+    /** @return the native cast duration (ticks) this goal would use for {@code entry}. */
+    int plannedCastTime(LoadoutEntry entry) {
+        for (Resolved r : spells) {
+            if (r.entry() == entry) {
+                return resolveCastTime(r);
+            }
+        }
+        return 0;
+    }
+
+    /** @return Iron's own effective cast time (ticks) for {@code entry}, before any loadout override. */
+    int ironsEffectiveCastTime(LoadoutEntry entry) {
+        for (Resolved r : spells) {
+            if (r.entry() == entry) {
+                return SpellCompat.effectiveCastTime(r.spell(), effectiveLevel(r), mob);
+            }
+        }
+        return 0;
+    }
+
+    /** @return whether {@code entry}'s spell actually charges, so the overrides apply to it at all. */
+    boolean hasCastDuration(LoadoutEntry entry) {
+        for (Resolved r : spells) {
+            if (r.entry() == entry) {
+                return SpellCompat.hasCastDuration(r.spell());
+            }
+        }
+        return false;
     }
 
     /** @return Iron's mana cost of {@code entry} at its configured level, for the diagnostic table. */

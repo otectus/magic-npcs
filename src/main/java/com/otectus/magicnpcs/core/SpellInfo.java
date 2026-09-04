@@ -12,6 +12,8 @@ package com.otectus.magicnpcs.core;
  * @param cooldownTicks Iron's default cooldown at level 1, in ticks (20 = 1 s)
  * @param castType      Iron's cast type, e.g. {@code INSTANT}, {@code LONG}, {@code CONTINUOUS}
  * @param mobFriendly   heuristic: reliable for a generic mob caster (instant, target-aimed)
+ * @param provenance    which layer decided the spell's capability: {@code VERIFIED}, {@code OVERRIDE},
+ *                      {@code MANIFEST}, {@code NAMESPACE_TRUSTED} or {@code UNVERIFIED}
  */
 public record SpellInfo(
         String id,
@@ -19,5 +21,6 @@ public record SpellInfo(
         String rarity,
         int cooldownTicks,
         String castType,
-        boolean mobFriendly
+        boolean mobFriendly,
+        String provenance
 ) {}

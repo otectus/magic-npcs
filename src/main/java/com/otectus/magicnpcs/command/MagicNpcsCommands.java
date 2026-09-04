@@ -32,6 +32,7 @@ public final class MagicNpcsCommands {
 
         root.then(HelpCommand.node());
         root.then(WhyCommand.node());
+        root.then(AuditCommand.node());
         root.then(LoadoutCommand.loadoutNode());
         root.then(LoadoutCommand.validateNode());
         root.then(SpellListCommand.node());

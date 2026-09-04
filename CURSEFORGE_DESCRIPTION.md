@@ -14,14 +14,19 @@ No add-on mods, no tags, no code. One small JSON file is the entire opt-in.
   Iron's spells — that mob now casts them. **Your datapack always beats a loadout the mod itself
   ships**, so you never get a mix of your spells and ours. When two *datapacks* target one entity they
   **pool** by default; add `"replace": true` to override cleanly, or `"enabled": false` to switch a mob
-  type off entirely. Vanilla mobs cast nothing until you opt them in.
+  type off entirely. Vanilla mobs cast nothing until you opt them in. **Loadouts for mods that are not
+  installed are skipped silently** — no error, just invisible until you install the mod; this
+  distinguishes "the mod is absent" from "the datapack has a typo".
 
 - **It tells you why.** `/magicnpcs why @e[type=minecraft:skeleton,sort=nearest,limit=1]` explains, for
-  a live mob, exactly why it is or isn't casting right now — goal injection, reconciliation state, the
-  goal that's blocking it, state gates, target and line of sight, mana, and a per-spell table naming
-  the first blocker for each spell. `/magicnpcs validate` reports every loadout file it discovered and
-  what happened to it — active, shadowed, suppressed, or **failed to load**. Type `/magicnpcs` for the
-  full tree; every line it prints is a command you can paste.
+  a live mob, exactly why it is or isn't casting right now — goal injection and heartbeat age,
+  reconciliation state, the goal that's blocking it, state gates, target and line of sight, mana, and
+  a per-spell table naming the first blocker for each spell. The table shows each goal's attack-goal
+  detection (exact match, regex pattern, or unrecognised) so you can configure `native_attack: suppress`
+  correctly for modded mobs. Diagnostic codes like `[BRAIN_AI]`, `[MANA_CLAMPED]` and `[GOAL_NOT_EVALUATED]`
+  flag special conditions. `/magicnpcs validate` reports every loadout file it discovered and what
+  happened to it — active, shadowed, suppressed, or **failed to load**. Type `/magicnpcs` for the full
+  tree; every line it prints is a command you can paste.
 
 - **Real Iron's casting.** Spells run Iron's own cast lifecycle — initiation, pre-cast, per-tick
   channelling, completion and cancellation — in the same order Iron's own casting mobs use. Channelled
@@ -57,6 +62,12 @@ No add-on mods, no tags, no code. One small JSON file is the entire opt-in.
   `telegraphGlow` (an outline during wind-up, off by default), `telegraphVolume`, and `minDangerTier`
   to telegraph only the spells actually worth dodging. Out-of-combat self-heals are never telegraphed.
 
+- **Tune spell cast-time per NPC.** Each spell entry in a loadout can shorten or lengthen Iron's native
+  cast using two optional fields: `cast_time` (absolute ticks) or `cast_time_multiplier` (scaling factor).
+  `Gravity Fissure` at 15 ticks becomes 8 ticks with `"cast_time_multiplier": 0.5`, or exactly 6 with
+  `"cast_time": 6`. The `windup` stays separate — a pre-cast wind-up your datapack adds. Omit both fields
+  for exact backward compatibility.
+
 - **Support out of combat.** A wounded support NPC heals itself without having to be attacked first, on
   its own slow cadence — and never at full health.
 
@@ -75,10 +86,44 @@ No add-on mods, no tags, no code. One small JSON file is the entire opt-in.
 
 - **Deeply tunable.** A per-world server config covers the master switch, mana/cooldown/regen balance,
   decision cadence, difficulty and rank scaling, line-of-sight and friendly-fire rules, a spell
-  allow/deny list, equipment requirements, wind-up feedback, and the whole magic-school system. A
-  second, pack-level config in `config/` holds the per-mod compat toggles, so modpack authors set them
-  once instead of per world. Individual shipped loadouts can be switched off from config alone, with no
-  datapack.
+  allow/deny list (supporting `namespace:*` wildcards to include or exclude whole spell packs), equipment
+  requirements, wind-up feedback, and the whole magic-school system. A second, pack-level config in
+  `config/` holds the per-mod compat toggles, so modpack authors set them once instead of per world.
+  Individual shipped loadouts can be switched off from config alone, with no datapack.
+
+## Add-on spell support (spell manifests)
+
+When you install a modpack with Iron's add-ons, Magic NPCs plays it safe: an unknown spell is marked
+UNVERIFIED until you allow it. A datapack can now declare what a spell does without editing the config
+file:
+
+**Drop a spell manifest in `data/my_pack/spell_manifests/my_spells.json`:**
+
+```json
+{
+  "format": 1,
+  "verified_against": "Irons Spellbooks 1.20.1-3.16.3",
+  "spells": {
+    "mymod:fireball": "DIRECT",
+    "mymod:heal_ally": "TARGET_ENTITY",
+    "mymod:summon": "SUMMON"
+  }
+}
+```
+
+Pack it alongside your loadouts. The manifest is merged with others on reload, so multiple packs can
+declare the same spells without conflict. `/magicnpcs spells` shows where each spell's support came from
+(verified, datapack manifest, namespace trusted, or unverified); `/magicnpcs validate` explains how to
+enable a spell that is blocked. `/magicnpcs audit spells` runs every registered spell past a real cast
+session (op-only), proving which ones actually work as NPCs — useful for validating a new manifest or
+diagnosing spell failures. An offline tool `tools/spell_manifest_audit.py` (Stdlib Python 3) helps
+modpack authors draft manifests from a mod's spell classes.
+
+Trusted single-target add-on spells (e.g., custom potions or buffs) can use the config keys
+`spells.trustedNamespaces` (e.g., `["mymod"]` treats all `mymod:*` spells as safe) or a one-spell
+override with `spells.capabilityOverrides` (e.g., `["mymod:custom_buff=DIRECT"]`). Both are weaker
+claims than a manifest — no runtime verification, friendly-fire estimates only — but they work for
+spells that follow the pattern.
 
 ## Purpose-built NPC mod support
 
@@ -160,7 +205,8 @@ The full guide is in the README and `docs/loadouts/`.
 
 ## Commands
 
-`/magicnpcs why` · `loadout entity` · `loadout id` · `validate` · `spells` · `config` · `reconcile` ·
+`/magicnpcs why` · `loadout entity` · `loadout id` · `validate` · `validate resource` · `validate id` ·
+`spells` · `config` · `reconcile` · `audit spells` · `audit status` · `audit cancel` ·
 `school info|set|reroll|clear|auto|pool` · `help`
 
 ## Requirements

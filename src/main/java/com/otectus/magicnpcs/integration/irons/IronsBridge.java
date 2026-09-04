@@ -4,6 +4,8 @@ import com.otectus.magicnpcs.MagicNpcs;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import com.otectus.magicnpcs.core.SpellInfo;
 import com.otectus.magicnpcs.core.feedback.TelegraphInfo;
+import com.otectus.magicnpcs.core.spell.SpellIdSuggestions;
+import com.otectus.magicnpcs.core.spell.SpellSupportResolver;
 import io.redspace.ironsspellbooks.api.magic.MagicData;
 import io.redspace.ironsspellbooks.api.registry.AttributeRegistry;
 import io.redspace.ironsspellbooks.api.registry.SchoolRegistry;
@@ -24,7 +26,10 @@ import net.minecraft.world.item.Item;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * The single seam to Iron's Spellbooks for the universal (mod-agnostic) casting
@@ -41,7 +46,37 @@ public final class IronsBridge {
     public static final TagKey<Item> SPELL_FOCUSES =
             TagKey.create(Registries.ITEM, new ResourceLocation("magicnpcs", "spell_focuses"));
 
+    /**
+     * {@code path -> namespaces} over the whole spell registry, built once on first use. Backs the
+     * "did you mean" suggestions: with add-ons installed, several mods register the same path, so a
+     * bare id or a wrong namespace has a plausible correction that the resolver must never take by
+     * itself.
+     */
+    private static volatile Map<String, List<String>> pathIndex;
+
     private IronsBridge() {}
+
+    /** @return the lazily built {@code path -> namespaces} index of every registered spell. */
+    public static Map<String, List<String>> pathIndex() {
+        Map<String, List<String>> index = pathIndex;
+        if (index != null) {
+            return index;
+        }
+        Map<String, List<String>> built = new LinkedHashMap<>();
+        for (AbstractSpell spell : SpellRegistry.REGISTRY.get()) {
+            if (spell == null || spell == SpellRegistry.none()) {
+                continue;
+            }
+            ResourceLocation id = spell.getSpellResource();
+            if (id == null) {
+                continue;
+            }
+            built.computeIfAbsent(id.getPath(), k -> new ArrayList<>()).add(id.getNamespace());
+        }
+        index = Map.copyOf(built);
+        pathIndex = index;
+        return index;
+    }
 
     /** @return true if the caster holds an item in the {@link #SPELL_FOCUSES} tag in either hand. */
     public static boolean holdsSpellFocus(LivingEntity caster) {
@@ -112,9 +147,9 @@ public final class IronsBridge {
      * {@code irons_spellbooks:} namespace or a wrong path (e.g. {@code fangward} vs {@code fang_ward}).
      */
     public static void warnUnknownSpell(ResourceLocation source, ResourceLocation entityType, ResourceLocation spellId) {
-        String hint = "minecraft".equals(spellId.getNamespace())
-                ? " (did you mean irons_spellbooks:" + spellId.getPath() + "?)"
-                : "";
+        String hint = SpellIdSuggestions.suggest(pathIndex(), spellId.toString())
+                .map(s -> " (" + s + ")")
+                .orElse("");
         MagicNpcs.LOGGER.warn(
                 "Loadout {} ({}): unknown spell id '{}' in a 'spell' field — skipping it.{} "
                         + "Run /magicnpcs spells to list valid ids.",
@@ -147,7 +182,8 @@ public final class IronsBridge {
                     spell.getRarity(1).name(),
                     spell.getSpellCooldown(),
                     castType != null ? castType.name() : "NONE",
-                    SpellCompat.supportOf(spell) == SpellCompat.Support.SUPPORTED));
+                    SpellCompat.supportOf(spell) == SpellCompat.Support.SUPPORTED,
+                    SpellCompat.provenanceOf(spell).name()));
         }
         out.sort((a, b) -> a.id().compareTo(b.id()));
         return out;
@@ -163,9 +199,11 @@ public final class IronsBridge {
         ResourceLocation id = ResourceLocation.tryParse(rawId);
         AbstractSpell spell = id == null ? null : getSpell(id);
         if (spell == null) {
+            Optional<String> suggestion = SpellIdSuggestions.suggest(pathIndex(), rawId);
             return new com.otectus.magicnpcs.core.SpellDiagnostic(rawId, false, false,
                     "UNKNOWN", "NONE", "UNSUPPORTED", false,
-                    "no spell with this id is registered", false, 0);
+                    "no spell with this id is registered", false, 0,
+                    SpellSupportResolver.Provenance.UNVERIFIED.name(), suggestion.orElse(null));
         }
         SpellCompat.Support support = SpellCompat.supportOf(spell);
         CastType castType = spell.getCastType();
@@ -179,7 +217,9 @@ public final class IronsBridge {
                 SpellCompat.castableByMob(spell),
                 support == SpellCompat.Support.SUPPORTED ? null : SpellCompat.unsupportedReason(spell),
                 SpellCompat.requiresTargetEntity(spell),
-                spell.getSpellCooldown());
+                spell.getSpellCooldown(),
+                SpellCompat.provenanceOf(spell).name(),
+                support == SpellCompat.Support.SUPPORTED ? null : SpellCompat.fixHint(spell));
     }
 
     public static boolean canAfford(LivingEntity caster, AbstractSpell spell, int level) {

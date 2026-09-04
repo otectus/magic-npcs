@@ -58,6 +58,19 @@ class LoadoutSchemaTest {
     }
 
     @Test
+    void theCastTimeKeysAreAcceptedEvenInStrictMode() {
+        assertTrue(check("{\"spell\": \"irons_spellbooks:gravity_fissure\", \"cast_time\": 6, "
+                + "\"cast_time_multiplier\": 0.5}", LoadoutSchema.SPELL_KEYS, true).isEmpty());
+    }
+
+    @Test
+    void theCastTimeAliasesSuggestTheRealKey() {
+        assertEquals("cast_time", LoadoutSchema.suggestFor("cast_duration", LoadoutSchema.SPELL_KEYS));
+        assertEquals("cast_time_multiplier",
+                LoadoutSchema.suggestFor("casttime_multiplier", LoadoutSchema.SPELL_KEYS));
+    }
+
+    @Test
     void anUnrelatedKeyGetsNoSuggestionRatherThanAMisleadingOne() {
         assertNull(LoadoutSchema.suggestFor("completely_unrelated_thing", LoadoutSchema.ROOT_KEYS));
     }

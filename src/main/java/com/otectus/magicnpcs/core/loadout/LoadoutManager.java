@@ -296,9 +296,11 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
             PackInfo pack = packInfoOf(rm, id);
             Shadowed inferred = inferFromShadowedResource(rm, id);
             LoadoutRecord record = LoadoutParser.parse(id, entry.getValue(), pack.packId(), pack.tier(),
-                    strict, inferred.entityType(), inferred.profession());
+                    strict, inferred.entityType(), inferred.profession(), LIVE_CHECKS);
             records.add(record);
-            if (record.entityType() != null) {
+            // An INAPPLICABLE record is kept out of byType: its type would otherwise resolve to nothing
+            // and be reported as "every loadout suppressed" for a mod that is not even here.
+            if (record.entityType() != null && record.status() != LoadoutRecord.Status.INAPPLICABLE) {
                 byType.computeIfAbsent(record.entityType(), k -> new ArrayList<>()).add(record);
             }
         }
@@ -355,7 +357,8 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
      * visible outcome rather than an invisible one.
      */
     private static LoadoutRecord classify(LoadoutRecord r, Set<ResourceLocation> winners, int keptCount) {
-        if (r.status() == LoadoutRecord.Status.REJECTED) {
+        if (r.status() == LoadoutRecord.Status.REJECTED
+                || r.status() == LoadoutRecord.Status.INAPPLICABLE) {
             return r;
         }
         if (r.loadout() != null && !r.loadout().enabled()) {
@@ -376,6 +379,42 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
                         "another loadout owns " + r.effectiveKey()
                                 + " — a datapack outranks a mod jar, and \"replace\": true outranks pooling",
                         "run /magicnpcs loadout id " + r.entityType() + " to see which one won"));
+    }
+
+    /**
+     * The live registry and mod-presence checks the parser runs against, built once.
+     *
+     * <p>Kept here rather than in {@link RegistryChecks} on purpose: {@code BuiltInRegistries} and
+     * {@code ModList} must not be classloaded by the unit tests, which have no bootstrapped Minecraft.
+     */
+    private static final RegistryChecks LIVE_CHECKS = new LiveRegistryChecks();
+
+    /** @return the live checks, for GameTests that want to drive the real parse path. */
+    public static RegistryChecks liveChecks() {
+        return LIVE_CHECKS;
+    }
+
+    private static final class LiveRegistryChecks implements RegistryChecks {
+        @Override
+        public boolean entityTypeExists(ResourceLocation id) {
+            return BuiltInRegistries.ENTITY_TYPE.containsKey(id);
+        }
+
+        @Override
+        public boolean professionExists(ResourceLocation id) {
+            return BuiltInRegistries.VILLAGER_PROFESSION.containsKey(id);
+        }
+
+        @Override
+        public boolean itemExists(ResourceLocation id) {
+            return BuiltInRegistries.ITEM.containsKey(id);
+        }
+
+        @Override
+        public boolean modLoaded(String namespace) {
+            // "minecraft" is a loaded mod on Forge, so vanilla ids are never mis-flagged.
+            return net.minecraftforge.fml.ModList.get().isLoaded(namespace);
+        }
     }
 
     /** Where a resource came from, as the {@code ResourceManager} reports it. */
@@ -602,9 +641,26 @@ public class LoadoutManager extends SimpleJsonResourceReloadListener {
     private static void logLoadSummary(LoadoutCatalog published) {
         LoadoutCatalog.Counts counts = published.counts();
         MagicNpcs.LOGGER.info("Loaded spellcaster loadouts (generation {}): discovered {}, active {}, "
-                        + "shadowed {}, suppressed {}, rejected {} — across {} entity type(s)",
+                        + "shadowed {}, suppressed {}, rejected {}, skipped {} — across {} entity type(s)",
                 published.generation(), counts.discovered(), counts.active(), counts.shadowed(),
-                counts.suppressed(), counts.rejected(), published.activeByType().size());
+                counts.suppressed(), counts.rejected(), counts.inapplicable(),
+                published.activeByType().size());
+
+        // Absent-mod files get one INFO line between them, never the per-file ERROR block: shipping a
+        // loadout for an optional mod is the normal case, and six ERROR blocks per reload for mods the
+        // user never installed is noise that hides the real ones (I1).
+        Set<String> absentMods = new java.util.TreeSet<>();
+        int skipped = 0;
+        for (LoadoutRecord r : published.records()) {
+            if (r.status() == LoadoutRecord.Status.INAPPLICABLE) {
+                skipped++;
+                r.absentNamespace().ifPresent(absentMods::add);
+            }
+        }
+        if (skipped > 0) {
+            MagicNpcs.LOGGER.info("{} loadout(s) skipped: their mods are not installed ({})",
+                    skipped, String.join(", ", absentMods));
+        }
 
         for (LoadoutRecord r : published.records()) {
             if (r.status() != LoadoutRecord.Status.REJECTED) {

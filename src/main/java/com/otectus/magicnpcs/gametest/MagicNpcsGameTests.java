@@ -1,9 +1,17 @@
 package com.otectus.magicnpcs.gametest;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
 import com.otectus.magicnpcs.compat.IronsCompat;
+import com.otectus.magicnpcs.core.loadout.LoadoutManager;
+import com.otectus.magicnpcs.core.loadout.LoadoutParser;
+import com.otectus.magicnpcs.core.loadout.LoadoutProblem;
+import com.otectus.magicnpcs.core.loadout.LoadoutRecord;
+import com.otectus.magicnpcs.core.loadout.LoadoutSourceTier;
 import com.otectus.magicnpcs.integration.irons.IronsCastingTests;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.gametest.GameTestHolder;
 import net.minecraftforge.gametest.PrefixGameTestTemplate;
 
@@ -42,6 +50,36 @@ public final class MagicNpcsGameTests {
         helper.succeed();
     }
 
+    /**
+     * 0.9.0: a loadout for a mod that is not installed is SKIPPED, not REJECTED (I1).
+     *
+     * <p>Runs through {@link LoadoutManager#liveChecks()} rather than a stub, because the thing worth
+     * proving is that the live {@code ModList} path answers "absent" for an absent namespace — the unit
+     * tests already cover the parser's branches.
+     */
+    @GameTest(template = "platform")
+    public static void absentModLoadoutIsSkippedNotRejected(GameTestHelper helper) {
+        JsonElement json = JsonParser.parseString("""
+                {
+                  "entity_type": "magicnpcs_test_absent:thing",
+                  "spells": [ { "spell": "irons_spellbooks:magic_missile" } ]
+                }""");
+        LoadoutRecord record = LoadoutParser.parse(new ResourceLocation("magicnpcs", "absent_mod_test"),
+                json, "<gametest>", LoadoutSourceTier.DATAPACK, false, null, null,
+                LoadoutManager.liveChecks());
+        if (record.status() != LoadoutRecord.Status.INAPPLICABLE) {
+            helper.fail("expected INAPPLICABLE for an absent mod, got " + record.status());
+            return;
+        }
+        for (LoadoutProblem problem : record.problems()) {
+            if (problem.severity() == LoadoutProblem.Severity.ERROR) {
+                helper.fail("an absent mod must not produce an error: " + problem.describe());
+                return;
+            }
+        }
+        helper.succeed();
+    }
+
     // --- Runtime casting checks (require Iron's; recruit cases also require Recruits) ---
     //
     // Each guards on IronsCompat.isLoaded() and, only then, delegates to the Iron's-side
@@ -58,6 +96,19 @@ public final class MagicNpcsGameTests {
             return;
         }
         IronsCastingTests.skeletonCastsMagicMissile(helper);
+    }
+
+    /**
+     * Target spells: Iron's pre-cast helpers raycast along the caster's facing, so a caster spawned
+     * looking away from its target must still start the cast — the session snaps facing first.
+     */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void targetSpellStartsWhenCasterFacesAway(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.targetSpellStartsWhenCasterFacesAway(helper);
     }
 
     /**
@@ -357,5 +408,123 @@ public final class MagicNpcsGameTests {
             return;
         }
         IronsCastingTests.manualClearStaysCleared(helper);
+    }
+
+    /** 0.9.0: cast_time_multiplier 0.5 turns Gravity Fissure's 15-tick charge into 8 real ticks. */
+    @GameTest(template = "platform", timeoutTicks = 300, required = false)
+    public static void gravityFissureHalfMultiplierCastsInEightTicks(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.gravityFissureHalfMultiplierCastsInEightTicks(helper);
+    }
+
+    /** 0.9.0: windup and an absolute cast_time are separate delays, and absolute beats the multiplier. */
+    @GameTest(template = "platform", timeoutTicks = 300, required = false)
+    public static void gravityFissureAbsoluteSixWithWindupSix(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.gravityFissureAbsoluteSixWithWindupSix(helper);
+    }
+
+    /** 0.9.0: an entry with neither override charges for exactly Iron's effective cast time. */
+    @GameTest(template = "platform", timeoutTicks = 300, required = false)
+    public static void noOverrideKeepsIronsEffectiveDuration(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.noOverrideKeepsIronsEffectiveDuration(helper);
+    }
+
+    /** 0.9.0: a scripted (SCRIPT-source) cast keeps Iron's timing, not the loadout's override. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void scriptedCastIgnoresLoadoutOverride(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.scriptedCastIgnoresLoadoutOverride(helper);
+    }
+
+    /** 0.9.0: the cast session advances at most once per game tick, however often the goal is ticked. */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false)
+    public static void sameTickDoubleTickIsIgnored(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.sameTickDoubleTickIsIgnored(helper);
+    }
+
+    // --- 0.9.0: out-of-combat SUPPORT regression coverage (ADR 0005) ---
+
+    /** 0.9.0: a wounded caster with no target completes a self-heal and gains health. */
+    @GameTest(template = "platform", timeoutTicks = 400, required = false)
+    public static void woundedIdleCasterSelfHeals(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.woundedIdleCasterSelfHeals(helper);
+    }
+
+    /**
+     * 0.9.0: with supportOutOfCombat off, an idle wounded caster never starts a cast. Runs in its own
+     * batch — it flips the shared config, which would otherwise stop the idle casters in the default
+     * batch from ever casting.
+     */
+    @GameTest(template = "platform", timeoutTicks = 400, required = false, batch = "supportOutOfCombat")
+    public static void supportOutOfCombatDisabledNeverCasts(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.supportOutOfCombatDisabledNeverCasts(helper);
+    }
+
+    /** 0.9.0: acquiring a target is served at the combat cadence, not the idle one. */
+    @GameTest(template = "platform", timeoutTicks = 400, required = false)
+    public static void targetAcquisitionUsesCombatCadence(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.targetAcquisitionUsesCombatCadence(helper);
+    }
+
+    /** 0.9.0: an out-of-combat self-heal plays no wind-up telegraph. */
+    @GameTest(template = "platform", timeoutTicks = 400, required = false)
+    public static void outOfCombatHealSkipsTelegraph(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.outOfCombatHealSkipsTelegraph(helper);
+    }
+
+    /** 0.9.0: an idle caster with no mana waits for it, then heals. */
+    @GameTest(template = "platform", timeoutTicks = 400, required = false)
+    public static void outOfCombatHealWaitsForMana(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.outOfCombatHealWaitsForMana(helper);
+    }
+    /**
+     * 0.9.0: a {@code spells.capabilityOverrides} entry promotes an Iron's spell the built-in table
+     * marks unsupported. Its own batch, because it mutates shared config while it runs.
+     */
+    @GameTest(template = "platform", timeoutTicks = 200, required = false, batch = "capabilityOverrides")
+    public static void capabilityOverrideEnablesUnsupportedIronsSpell(GameTestHelper helper) {
+        if (!IronsCompat.isLoaded()) {
+            helper.succeed();
+            return;
+        }
+        IronsCastingTests.capabilityOverrideEnablesUnsupportedIronsSpell(helper);
     }
 }

@@ -63,18 +63,23 @@ class DocumentedCommandsTest {
             "school reroll",
             "school clear",
             "school auto",
-            "school pool");
+            "school pool",
+            "audit",
+            "audit spells",
+            "audit status",
+            "audit cancel");
 
     /**
      * Paths that need a subcommand to do anything. Documentation may still name them — every one of
      * them prints its usage since 0.6.2 — but a line that is offered as something to <em>run</em>
      * should be complete.
      */
-    private static final Set<String> HEADING_PATHS = Set.of("loadout", "school");
+    private static final Set<String> HEADING_PATHS = Set.of("loadout", "school", "audit");
 
     private static final List<String> DOCS = List.of(
             "README.md", "CURSEFORGE_DESCRIPTION.md", "CHANGELOG.md",
-            "docs/loadouts/README.md", "docs/schools.md", "docs/mob-friendly-spells.md");
+            "docs/loadouts/README.md", "docs/schools.md", "docs/mob-friendly-spells.md",
+            "docs/compat/irons-addons.md");
 
     /** {@code /magicnpcs} plus everything up to the end of the line, inside or outside a code fence. */
     private static final Pattern COMMAND = Pattern.compile("/magicnpcs\\b([^`\\n|]*)");

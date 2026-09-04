@@ -129,6 +129,13 @@ dependencies {
     if (project.hasProperty('customNpcsRuntime') && !project.hasProperty('devRuntime')) {
         runtimeOnly fg.deobf("blank:${customnpcs_jar_artifact}:${customnpcs_jar_version}")
     }
+    // LUMINOUS: BEASTS on its own or, more usefully, alongside -PdevRuntime (-PluminousRuntime).
+    // Deliberately NOT excluded under devRuntime, unlike the two flags above: Luminous needs GeckoLib
+    // and casting needs Iron's, both of which only -PdevRuntime stages, so the two are meant to be
+    // combined. runtimeOnly → never compiled against, never shipped.
+    if (project.hasProperty('luminousRuntime')) {
+        runtimeOnly fg.deobf("curse.maven:${luminous_project}:${luminous_file}")
+    }
     if (project.hasProperty('devRuntime')) {
         // Full Iron's runtime stack from local libs/ jars (the user's pack versions), so the
         // dev runtime matches production and needs no network for Iron's/GeckoLib/PlayerAnimator.

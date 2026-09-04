@@ -277,4 +277,108 @@ class LoadoutRecordTest {
         assertTrue(conditions.traitsAnyOf().isEmpty());
         assertTrue(conditions.traitsNoneOf().isEmpty());
     }
+
+    @Test
+    void aNegativeCastTimeIsReportedAndRejectsTheFile() {
+        LoadoutRecord record = parse("""
+                {
+                  "entity_type": "minecraft:skeleton",
+                  "spells": [ { "spell": "irons_spellbooks:gravity_fissure", "cast_time": -1 },
+                              { "spell": "irons_spellbooks:magic_missile" } ]
+                }""");
+        LoadoutProblem bad = problem(record, "CAST_TIME_NEGATIVE");
+        assertNotNull(bad);
+        assertEquals("/spells/0/cast_time", bad.pointer());
+        assertEquals(LoadoutRecord.Status.REJECTED, record.status());
+    }
+
+    @Test
+    void anInvalidCastTimeMultiplierIsReported() {
+        LoadoutRecord record = parse("""
+                {
+                  "entity_type": "minecraft:skeleton",
+                  "spells": [ { "spell": "irons_spellbooks:gravity_fissure",
+                                "cast_time_multiplier": -0.5 },
+                              { "spell": "irons_spellbooks:magic_missile" } ]
+                }""");
+        LoadoutProblem bad = problem(record, "CAST_TIME_MULTIPLIER_INVALID");
+        assertNotNull(bad);
+        assertEquals("/spells/0/cast_time_multiplier", bad.pointer());
+    }
+
+    @Test
+    void settingBothCastTimeFieldsSaysWhichOneWins() {
+        LoadoutRecord record = parse("""
+                {
+                  "entity_type": "minecraft:skeleton",
+                  "spells": [ { "spell": "irons_spellbooks:gravity_fissure",
+                                "cast_time": 6, "cast_time_multiplier": 0.5 } ]
+                }""");
+        assertEquals(LoadoutRecord.Status.ACTIVE, record.status());
+        LoadoutProblem info = problem(record, "CAST_TIME_ABSOLUTE_WINS");
+        assertNotNull(info);
+        assertEquals(LoadoutProblem.Severity.INFO, info.severity());
+    }
+
+    @Test
+    void theCastTimeOverridesRoundTripThroughTheRecord() {
+        LoadoutRecord record = parse("""
+                {
+                  "entity_type": "minecraft:skeleton",
+                  "spells": [ { "spell": "irons_spellbooks:gravity_fissure",
+                                "cast_time": 6, "cast_time_multiplier": 0.5 } ]
+                }""");
+        LoadoutEntry entry = record.loadout().spells().get(0);
+        com.google.gson.JsonObject written = LoadoutJson.toJson(entry);
+        assertTrue(written.has(LoadoutJson.CAST_TIME));
+        assertTrue(written.has(LoadoutJson.CAST_TIME_MULTIPLIER));
+
+        LoadoutRecord reparsed = parse("""
+                { "entity_type": "minecraft:skeleton", "spells": [ %s ] }"""
+                .formatted(written.toString()));
+        LoadoutEntry back = reparsed.loadout().spells().get(0);
+        assertEquals(entry.castTimeTicks(), back.castTimeTicks());
+        assertEquals(entry.castTimeMultiplier(), back.castTimeMultiplier());
+    }
+
+    @Test
+    void anEntryWithNoCastTimeOverrideWritesNeitherKey() {
+        LoadoutRecord record = parse("""
+                {
+                  "entity_type": "minecraft:skeleton",
+                  "spells": [ { "spell": "irons_spellbooks:magic_missile" } ]
+                }""");
+        com.google.gson.JsonObject written = LoadoutJson.toJson(record.loadout().spells().get(0));
+        assertFalse(written.has(LoadoutJson.CAST_TIME));
+        assertFalse(written.has(LoadoutJson.CAST_TIME_MULTIPLIER));
+    }
+
+    @Test
+    void anInapplicableRecordCountsApartFromTheRejectedOnes() {
+        // "parsed" is what the author is told loaded; a file skipped for an absent mod did not load
+        // and did not fail, so it belongs in neither the parsed nor the rejected column.
+        LoadoutRecord rejected = parse("""
+                { "entity_type": "minecraft:skeleton", "spells": [ { "level": 1 } ] }""");
+        LoadoutRecord skipped = LoadoutParser.parse(ID, JsonParser.parseString("""
+                {
+                  "entity_type": "recruits:recruit",
+                  "spells": [ { "spell": "irons_spellbooks:magic_missile" } ]
+                }"""), "mypack", LoadoutSourceTier.DATAPACK, false, null, null,
+                RegistryChecks.of(id -> true, id -> true, id -> true, ns -> !ns.equals("recruits")));
+        LoadoutRecord active = parse("""
+                {
+                  "entity_type": "minecraft:skeleton",
+                  "spells": [ { "spell": "irons_spellbooks:magic_missile" } ]
+                }""");
+
+        LoadoutCatalog catalog = new LoadoutCatalog(1, java.util.List.of(rejected, skipped, active),
+                java.util.Map.of(), java.util.Set.of(), java.util.Map.of(), java.util.Set.of());
+        LoadoutCatalog.Counts counts = catalog.counts();
+        assertEquals(3, counts.discovered());
+        assertEquals(1, counts.rejected());
+        assertEquals(1, counts.inapplicable());
+        assertEquals(1, counts.parsed());
+        assertEquals(LoadoutRecord.Status.INAPPLICABLE, skipped.status());
+        assertEquals("recruits", skipped.absentNamespace().orElse(null));
+    }
 }

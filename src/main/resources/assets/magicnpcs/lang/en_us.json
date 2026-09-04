@@ -7,6 +7,7 @@
   "magicnpcs.configuration.castingGoalUsesLookFlag": "Casting goal claims the LOOK flag",
   "magicnpcs.configuration.disabledEntityTypes": "Disabled entity types",
   "magicnpcs.configuration.suppressibleAttackGoals": "Extra native attack-goal classes",
+  "magicnpcs.configuration.attackGoalNamePatterns": "Native attack-goal name patterns",
   "magicnpcs.configuration.debugLogging": "Debug logging",
 
   "magicnpcs.configuration.manaMultiplier": "Mana pool multiplier",

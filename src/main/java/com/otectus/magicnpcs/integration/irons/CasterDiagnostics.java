@@ -1,6 +1,7 @@
 package com.otectus.magicnpcs.integration.irons;
 
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
+import com.otectus.magicnpcs.core.spell.SpellSupportResolver;
 import com.otectus.magicnpcs.core.SchoolData;
 import com.otectus.magicnpcs.core.adapter.NpcAdapter;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
@@ -12,22 +13,30 @@ import com.otectus.magicnpcs.core.loadout.LoadoutManager;
 import com.otectus.magicnpcs.core.loadout.LoadoutResolution;
 import com.otectus.magicnpcs.core.loadout.NativeAttackPolicy;
 import com.otectus.magicnpcs.core.loadout.SpellcasterLoadout;
+import com.otectus.magicnpcs.core.caster.CasterMovementGoal;
 import com.otectus.magicnpcs.core.util.AttackGoals;
+import com.otectus.magicnpcs.core.util.SuppressedGoal;
 import com.otectus.magicnpcs.core.util.GoalContention;
 import com.otectus.magicnpcs.core.util.LineOfFire;
 import io.redspace.ironsspellbooks.api.magic.MagicData;
 import io.redspace.ironsspellbooks.api.registry.AttributeRegistry;
+import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
 import io.redspace.ironsspellbooks.capabilities.magic.MagicManager;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.RangedAttribute;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.goal.WrappedGoal;
+import net.minecraft.world.entity.ai.goal.target.TargetGoal;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 /**
  * Answers "why is <em>this</em> mob, right now, not casting?" as a {@link DiagnosticReport}.
@@ -42,6 +51,14 @@ import java.util.Locale;
  * it explains. Iron's-side, so the command package stays Iron's-free.
  */
 public final class CasterDiagnostics {
+
+    /**
+     * How stale the casting goal's heartbeat may get before {@code why} calls it a blocker. The goal
+     * selector re-runs {@code canUse()} every other tick, so 40 ticks is roughly 20 missed passes —
+     * far past anything normal scheduling can explain.
+     */
+    static final int GOAL_STALE_TICKS = 40;
+
     private CasterDiagnostics() {}
 
     public static DiagnosticReport describe(Mob mob) {
@@ -59,7 +76,7 @@ public final class CasterDiagnostics {
         }
         describeState(out, mob, goal);
         LivingEntity target = describeTarget(out, mob, goal);
-        describeMana(out, mob);
+        describeMana(out, mob, goal);
         describeSpells(out, mob, goal, target);
         return out.build();
     }
@@ -200,14 +217,23 @@ public final class CasterDiagnostics {
      * starves the casting goal completely. That is exactly why a witch with a loadout never cast.
      */
     private static void describeGoalEnvironment(DiagnosticReport.Builder out, Mob mob, WrappedGoal ours) {
-        out.info("goals (priority | class | flags | running):");
-        for (WrappedGoal wrapped : mob.goalSelector.getAvailableGoals()) {
+        // Sorted, because Vampirism's GoalSelectorMixin swaps availableGoals for a ConcurrentHashMap
+        // key set: iteration order there is neither insertion order nor stable between two runs of
+        // /magicnpcs why, which makes two dumps of the same mob impossible to compare.
+        List<WrappedGoal> goals = new ArrayList<>(mob.goalSelector.getAvailableGoals());
+        goals.sort(Comparator.comparingInt(WrappedGoal::getPriority)
+                .thenComparing(w -> AttackGoals.simpleName(w.getGoal().getClass())));
+        out.info("goals (priority | class | flags | running | native-attack):");
+        for (WrappedGoal wrapped : goals) {
             Goal g = wrapped.getGoal();
             String marker = wrapped == ours ? " <- casting goal" : "";
-            out.detail(String.format(Locale.ROOT, "%d | %s | %s | %s%s",
+            out.detail(String.format(Locale.ROOT, "%d | %s | %s | %s | %s%s",
                     wrapped.getPriority(), AttackGoals.simpleName(g.getClass()), AttackGoals.flags(g),
-                    wrapped.isRunning() ? "RUNNING" : "idle", marker));
+                    wrapped.isRunning() ? "RUNNING" : "idle",
+                    AttackGoals.matchedBy(g).orElse("-"), marker));
         }
+        describeUnmatchedAttackGoals(out, mob, goals);
+        describeBrain(out, mob);
         if (ours == null) {
             return;
         }
@@ -243,6 +269,68 @@ public final class CasterDiagnostics {
         }
     }
 
+    /**
+     * The goals that look like an attack but that {@code native_attack} cannot see.
+     *
+     * <p>"suppress does nothing on this mob" is the report, and the honest answer is a list of the
+     * goals that are running right now, contest movement or looking, are not targeting goals and are
+     * not ours — and that neither the exact-name list nor the patterns claimed. Only printed while the
+     * mob has a target, because idle goals say nothing about a fight that is not happening.
+     */
+    private static void describeUnmatchedAttackGoals(DiagnosticReport.Builder out, Mob mob,
+                                                     List<WrappedGoal> goals) {
+        if (mob.getTarget() == null) {
+            return;
+        }
+        List<String> candidates = new ArrayList<>();
+        for (WrappedGoal wrapped : goals) {
+            Goal g = wrapped.getGoal();
+            if (!wrapped.isRunning() || isOurs(g) || g instanceof TargetGoal) {
+                continue;
+            }
+            boolean contests = g.getFlags().contains(Goal.Flag.MOVE) || g.getFlags().contains(Goal.Flag.LOOK);
+            if (contests && AttackGoals.matchedBy(g).isEmpty()) {
+                candidates.add(AttackGoals.nestedName(g.getClass()));
+            }
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+        out.warn("candidate attack goals not matched: " + String.join(", ", candidates));
+        out.detail("add the class name to general.suppressibleAttackGoals or a regex to "
+                + "general.attackGoalNamePatterns");
+    }
+
+    /**
+     * Whether this mob also runs a {@code Brain}, which the goal selector knows nothing about.
+     *
+     * <p>Ars Nouveau, Occultism (SmartBrainLib) and vanilla villagers drive look and movement from
+     * behaviours, so a casting goal can hold its flags and still lose control of the mob. The whole
+     * read is guarded: a mod with a half-built Brain must not be able to break {@code why}.
+     */
+    private static void describeBrain(DiagnosticReport.Builder out, Mob mob) {
+        try {
+            var brain = mob.getBrain();
+            boolean running = !brain.getRunningBehaviors().isEmpty();
+            Optional<net.minecraft.world.entity.schedule.Activity> activity = brain.getActiveNonCoreActivity();
+            if (!running && activity.isEmpty()) {
+                return;
+            }
+            out.info("this mob also runs a Brain (" + activity.map(a -> a.getName()).orElse("behaviors active")
+                    + "); look/movement may be contested outside the goal selector [BRAIN_AI]");
+        } catch (Throwable t) {
+            // A modded Brain that throws on inspection is itself worth knowing about, but it is not a
+            // reason to lose the rest of the report.
+            out.detail("brain: could not be inspected (" + t.getClass().getSimpleName() + ")");
+        }
+    }
+
+    /** @return true if {@code goal} is one Magic NPCs installed itself. */
+    private static boolean isOurs(Goal goal) {
+        return goal instanceof NpcSpellAttackGoal || goal instanceof CasterMovementGoal
+                || goal instanceof SuppressedGoal;
+    }
+
     /** Step 3: the state gates, using the goal's own check so the two can never diverge. */
     private static void describeState(DiagnosticReport.Builder out, Mob mob, NpcSpellAttackGoal goal) {
         String blocker = goal.stateBlocker();
@@ -257,6 +345,19 @@ public final class CasterDiagnostics {
                     "cadence: next decision in %d tick(s) (%.1fs).", wait, wait / 20.0));
         } else {
             out.good("cadence: ready to decide now.");
+        }
+        int heartbeat = ManagedCasterState.of(mob).goalHeartbeatAge(mob.tickCount);
+        out.detail("casting driver: goal");
+        if (heartbeat == Integer.MAX_VALUE) {
+            out.detail("goal heartbeat: never");
+        } else {
+            out.detail(String.format(Locale.ROOT, "goal heartbeat: %d tick(s) ago", heartbeat));
+        }
+        if (heartbeat > GOAL_STALE_TICKS) {
+            out.bad(String.format(Locale.ROOT,
+                    "injected casting goal has not been evaluated for %s ticks — this mob's AI may not "
+                            + "run the vanilla goal selector [GOAL_NOT_EVALUATED]",
+                    heartbeat == Integer.MAX_VALUE ? "any" : String.valueOf(heartbeat)));
         }
         if (goal.loadout().nativeAttack() == NativeAttackPolicy.YIELD && AttackGoals.anyNativeAttackRunning(mob)) {
             out.bad("native_attack=yield: one of the mob's own attack goals is running, so casting is "
@@ -303,7 +404,7 @@ public final class CasterDiagnostics {
     }
 
     /** Step 6 (printed before the table, because the table references it): mana. */
-    private static void describeMana(DiagnosticReport.Builder out, Mob mob) {
+    private static void describeMana(DiagnosticReport.Builder out, Mob mob, NpcSpellAttackGoal goal) {
         AttributeInstance max = mob.getAttribute(AttributeRegistry.MAX_MANA.get());
         AttributeInstance regen = mob.getAttribute(AttributeRegistry.MANA_REGEN.get());
         if (max == null) {
@@ -316,6 +417,20 @@ public final class CasterDiagnostics {
                 max.getValue() * (regen == null ? 0.0 : regen.getValue()) * 0.01
                         * MagicNpcsConfig.REGEN_MULTIPLIER.get(),
                 MagicManager.MANA_REGEN_TICKS));
+        // We set max_mana with setBaseValue, so an attribute mod that narrows the attribute's range
+        // (AttributeFix, Apothic Attributes) clamps it silently: the loadout says 1000 and the mob has
+        // 100, with nothing in the log to say so.
+        double wanted = CasterReconciler.desiredMaxMana(mob, goal.loadout().maxMana());
+        double actual = max.getBaseValue();
+        if (Math.abs(wanted - actual) > 0.5) {
+            String rangeClause = max.getAttribute() instanceof RangedAttribute ranged
+                    ? String.format(Locale.ROOT, "; attribute range max %.0f", ranged.getMaxValue())
+                    : "";
+            out.warn(String.format(Locale.ROOT,
+                    "max_mana clamped to %.0f (wanted %.0f%s) — an attribute range cap applies; "
+                            + "see AttributeFix / Apothic Attributes [MANA_CLAMPED]",
+                    actual, wanted, rangeClause));
+        }
     }
 
     /** Step 5: the per-spell table — cooldown, mana, role, range, LOS, friendly fire, condition. */
@@ -337,19 +452,60 @@ public final class CasterDiagnostics {
             String levelText = level == entry.level()
                     ? String.valueOf(entry.level())
                     : entry.level() + "->" + level; // raised by the caster's rank
-            String head = String.format(Locale.ROOT, "%s  %s lvl%s w%d  %s  cd %d/%dt  mana %d  windup %dt",
+            AbstractSpell resolved = IronsBridge.getSpell(entry.spell());
+            SpellSupportResolver.Verdict verdict = resolved == null ? null : SpellCompat.verdictOf(resolved);
+            String head = String.format(Locale.ROOT,
+                    "%s  %s lvl%s w%d  %s  cd %d/%dt  mana %d  windup %dt  cast %dt  %s",
                     entry.spell(), entry.role().name().toLowerCase(Locale.ROOT), levelText, entry.weight(),
                     describeRange(entry),
                     goal.cooldownRemaining(entry.spell()), goal.plannedCooldown(entry),
-                    goal.manaCost(entry), goal.plannedWindup(entry));
+                    goal.manaCost(entry), goal.plannedWindup(entry), goal.plannedCastTime(entry),
+                    verdict == null ? "?" : verdict.provenance().name().toLowerCase(Locale.ROOT));
             String blocker = spellBlocker(mob, goal, entry, target, mana, reactive, hurt);
             out.detail(head);
+            if (verdict != null && verdict.provenance() == SpellSupportResolver.Provenance.NAMESPACE_TRUSTED) {
+                out.detail("  [NAMESPACE_TRUSTED] trusted by namespace only: corridor friendly-fire "
+                        + "geometry and no cast-data guarantee. Declare it in data/"
+                        + entry.spell().getNamespace() + "/spell_manifests/*.json to state what it needs.");
+            }
+            String castDetail = describeCastTime(goal, entry);
+            if (castDetail != null) {
+                out.detail("  " + castDetail);
+            }
             if (blocker == null) {
                 out.detail("  -> castable now");
             } else {
                 out.detail("  -> blocked: " + blocker);
             }
         }
+    }
+
+    /**
+     * @return the extra cast-timing line for {@code entry}, or {@code null} when the entry carries no
+     *         override and its spell charges normally (the head line already says everything).
+     */
+    private static String describeCastTime(NpcSpellAttackGoal goal, LoadoutEntry entry) {
+        boolean override = entry.castTimeTicks() != null || entry.castTimeMultiplier() != null;
+        boolean hasDuration = goal.hasCastDuration(entry);
+        if (!override && hasDuration) {
+            return null;
+        }
+        if (!hasDuration) {
+            AbstractSpell spell = IronsBridge.getSpell(entry.spell());
+            String castType = spell == null ? "INSTANT" : spell.getCastType().name();
+            return String.format(Locale.ROOT,
+                    "cast: 0t (instant)  note: cast_time is ignored because this spell is %s", castType);
+        }
+        int planned = goal.plannedCastTime(entry);
+        int ironsEffective = goal.ironsEffectiveCastTime(entry);
+        if (entry.castTimeTicks() != null) {
+            return String.format(Locale.ROOT,
+                    "cast: %dt  iron_effective_cast: %dt  cast_time: %dt (absolute override)",
+                    planned, ironsEffective, entry.castTimeTicks());
+        }
+        return String.format(Locale.ROOT,
+                "cast: %dt  iron_effective_cast: %dt  cast_time_multiplier: %sx",
+                planned, ironsEffective, entry.castTimeMultiplier());
     }
 
     /** The first reason this spell is not castable right now, mirroring the goal's own ordering. */

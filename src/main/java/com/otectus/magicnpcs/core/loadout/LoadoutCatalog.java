@@ -96,24 +96,32 @@ public final class LoadoutCatalog {
         return out;
     }
 
-    /** Discovered/parsed/active/shadowed/suppressed/rejected counts, for the validation header. */
+    /**
+     * Discovered/parsed/active/shadowed/suppressed/rejected/inapplicable counts, for the validation
+     * header. An INAPPLICABLE file never parsed into a loadout either, but it is nobody's mistake, so
+     * it is counted apart from the rejected ones.
+     */
     public Counts counts() {
         int active = 0;
         int shadowed = 0;
         int suppressed = 0;
         int rejected = 0;
+        int inapplicable = 0;
         for (LoadoutRecord r : records) {
             switch (r.status()) {
                 case ACTIVE -> active++;
                 case SHADOWED -> shadowed++;
                 case SUPPRESSED -> suppressed++;
                 case REJECTED -> rejected++;
+                case INAPPLICABLE -> inapplicable++;
             }
         }
-        return new Counts(records.size(), records.size() - rejected, active, shadowed, suppressed, rejected);
+        return new Counts(records.size(), records.size() - rejected - inapplicable, active, shadowed,
+                suppressed, rejected, inapplicable);
     }
 
-    public record Counts(int discovered, int parsed, int active, int shadowed, int suppressed, int rejected) {}
+    public record Counts(int discovered, int parsed, int active, int shadowed, int suppressed,
+                         int rejected, int inapplicable) {}
 
     /** Every problem in the catalog at or above {@code min}, paired with the record that raised it. */
     public Map<LoadoutRecord, List<LoadoutProblem>> problems(LoadoutProblem.Severity min) {

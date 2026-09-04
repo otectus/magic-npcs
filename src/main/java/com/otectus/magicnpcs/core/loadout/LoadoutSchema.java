@@ -35,7 +35,8 @@ public final class LoadoutSchema {
     public static final Set<String> SPELL_KEYS = Set.of(
             LoadoutJson.SPELL, LoadoutJson.LEVEL, LoadoutJson.WEIGHT, LoadoutJson.MIN_RANGE,
             LoadoutJson.MAX_RANGE, LoadoutJson.SAFETY_RADIUS, LoadoutJson.ROLE, LoadoutJson.CAST_CHANCE,
-            LoadoutJson.COOLDOWN, LoadoutJson.COOLDOWN_MULTIPLIER, LoadoutJson.WINDUP, LoadoutJson.CONDITION,
+            LoadoutJson.COOLDOWN, LoadoutJson.COOLDOWN_MULTIPLIER, LoadoutJson.CAST_TIME,
+            LoadoutJson.CAST_TIME_MULTIPLIER, LoadoutJson.WINDUP, LoadoutJson.CONDITION,
             LoadoutJson.REQUIRE_HELD_ITEM, LoadoutJson.REQUIRED_ITEMS, LoadoutJson.REQUIRED_HAND);
 
     public static final Set<String> EQUIPMENT_KEYS = Set.of(
@@ -76,6 +77,10 @@ public final class LoadoutSchema {
             Map.entry("range", LoadoutJson.MAX_RANGE),
             Map.entry("cool_down", LoadoutJson.COOLDOWN),
             Map.entry("wind_up", LoadoutJson.WINDUP),
+            Map.entry("cast_duration", LoadoutJson.CAST_TIME),
+            Map.entry("casttime", LoadoutJson.CAST_TIME),
+            Map.entry("cast_duration_multiplier", LoadoutJson.CAST_TIME_MULTIPLIER),
+            Map.entry("casttime_multiplier", LoadoutJson.CAST_TIME_MULTIPLIER),
             Map.entry("spell_list", LoadoutJson.SPELLS));
 
     private LoadoutSchema() {}

@@ -104,6 +104,7 @@ public class MagicNpcs {
      */
     private void onConfigLoad(final ModConfigEvent.Loading event) {
         if (event.getConfig().getSpec() == MagicNpcsConfig.SPEC) {
+            MagicNpcsConfig.invalidateCaches();
             MagicNpcsConfig.warnOnLegacyKeys();
         }
     }
@@ -118,7 +119,13 @@ public class MagicNpcs {
      * in depth the audit asks for: the delayed queue must not be the only thing stopping a cast.
      */
     private void onConfigReload(final ModConfigEvent.Reloading event) {
-        if (event.getConfig().getSpec() != MagicNpcsConfig.SPEC || !IronsCompat.isLoaded()) {
+        if (event.getConfig().getSpec() != MagicNpcsConfig.SPEC) {
+            return;
+        }
+        // The parsed views of the list settings (trusted namespaces, capability overrides) are cached
+        // per config load, so they have to be dropped here or a corrected override never takes effect.
+        MagicNpcsConfig.invalidateCaches();
+        if (!IronsCompat.isLoaded()) {
             return;
         }
         net.minecraft.server.MinecraftServer server = net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
@@ -175,6 +182,9 @@ public class MagicNpcs {
         com.otectus.magicnpcs.core.caster.MagicNpcEvents.clear();
         if (IronsCompat.isLoaded()) {
             com.otectus.magicnpcs.integration.irons.DetachedCastDriver.clearAll();
+            // An audit that outlives the server would leave its two persistent dummies saved in the
+            // world it was auditing; cancelling writes the rows it already has and discards them.
+            com.otectus.magicnpcs.integration.irons.SpellAuditRun.cancelActive();
         }
         if (EasyNpcCompat.isLoaded()) {
             EasyNpcIntegration.shutdown();

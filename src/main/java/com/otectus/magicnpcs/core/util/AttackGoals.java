@@ -4,16 +4,22 @@ import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.goal.WrappedGoal;
+import net.minecraft.world.entity.ai.goal.target.TargetGoal;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Recognises a mob's <em>own</em> attack goals by class name, so the {@code native_attack} loadout
  * policy (ADR 0002) can suppress or yield to them without importing any mod. Matching is on the goal's
  * simple class name against {@link MagicNpcsConfig#attackGoalClassNames()} — the vanilla list plus
  * {@code general.suppressibleAttackGoals} — which covers subclasses in mods we cannot compile against.
+ * Names nobody has listed are still reachable through {@code general.attackGoalNamePatterns}, applied
+ * only to goals that are not target goals, not ours, and declare MOVE or LOOK.
  *
  * <p>Vanilla-only (no Iron's, no mod imports), so it is usable from the core and from the diagnostic
  * command.
@@ -21,10 +27,29 @@ import java.util.Locale;
 public final class AttackGoals {
     private AttackGoals() {}
 
+    /**
+     * Goals we install ourselves. They declare MOVE or LOOK and their names contain "Attack" and
+     * "Cast", so pattern matching would otherwise have the mod suppress its own casting AI.
+     */
+    private static final Set<String> OWN_GOAL_NAMES =
+            Set.of("NpcSpellAttackGoal", "CasterMovementGoal", "SuppressedGoal");
+
     /** @return true if {@code goal} looks like one of the mob's built-in attack goals. */
     public static boolean isNativeAttackGoal(Goal goal) {
+        return matchedBy(goal).isPresent();
+    }
+
+    /**
+     * Why {@code goal} counts as a native attack goal: {@code "exact"} for a
+     * {@link MagicNpcsConfig#attackGoalClassNames()} hit, {@code "pattern:<regex>"} for a
+     * {@link MagicNpcsConfig#attackGoalNamePatterns()} hit, empty when it is not one.
+     *
+     * <p>The exact list is checked first so a name a config author spelled out always wins, and so the
+     * reason printed by {@code /magicnpcs why} names the setting that decided.
+     */
+    public static Optional<String> matchedBy(Goal goal) {
         if (goal == null) {
-            return false;
+            return Optional.empty();
         }
         String simple = simpleName(goal.getClass());
         String nested = nestedName(goal.getClass());
@@ -36,10 +61,37 @@ public final class AttackGoals {
             // default "AbstractSkeleton$1" worked only because anonymous classes fall through to the
             // binary-name path below.)
             if (simple.equalsIgnoreCase(candidate) || nested.equalsIgnoreCase(candidate)) {
-                return true;
+                return Optional.of("exact");
             }
         }
-        return false;
+        if (!patternEligible(goal, simple)) {
+            return Optional.empty();
+        }
+        for (Pattern pattern : MagicNpcsConfig.attackGoalNamePatterns()) {
+            // Patterns see only the innermost simple name. The nested form is reserved for exact
+            // entries: matching it here would let an enclosing class called, say, "BossAttackGoals"
+            // pull every unrelated inner goal into a pattern hit.
+            if (pattern.matcher(simple).find()) {
+                return Optional.of("pattern:" + pattern.pattern());
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * The guard rails on pattern matching: a mod's goal class names are not ours to interpret freely,
+     * so a pattern may only ever look at a goal that could plausibly be an attack.
+     *
+     * <p>A {@link TargetGoal} only picks a target — suppressing one would leave the mob with no target
+     * at all, and "yield" would treat mere target acquisition as an attack in progress. A goal that
+     * declares neither MOVE nor LOOK does not contest anything the casting goal wants. And our own
+     * goals are excluded by name, because {@code core} cannot import the packages they live in.
+     */
+    private static boolean patternEligible(Goal goal, String simple) {
+        if (goal instanceof TargetGoal || OWN_GOAL_NAMES.contains(simple)) {
+            return false;
+        }
+        return goal.getFlags().contains(Goal.Flag.MOVE) || goal.getFlags().contains(Goal.Flag.LOOK);
     }
 
     /**
@@ -79,7 +131,13 @@ public final class AttackGoals {
     public static List<String> suppressNativeAttackGoals(Mob mob) {
         List<WrappedGoal> targets = new ArrayList<>();
         for (WrappedGoal wrapped : mob.goalSelector.getAvailableGoals()) {
-            if (isNativeAttackGoal(wrapped.getGoal())) {
+            Goal goal = wrapped.getGoal();
+            // Never wrap a wrapper (suppressing twice would strand the original behind two layers that
+            // releaseNativeAttackGoals only unwinds one of) and never wrap one of our own goals.
+            if (goal instanceof SuppressedGoal || OWN_GOAL_NAMES.contains(simpleName(goal.getClass()))) {
+                continue;
+            }
+            if (isNativeAttackGoal(goal)) {
                 targets.add(wrapped);
             }
         }

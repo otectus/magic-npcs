@@ -1,6 +1,8 @@
 package com.otectus.magicnpcs.integration.irons;
 
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
+import com.otectus.magicnpcs.core.spell.SpellCapability;
+import com.otectus.magicnpcs.core.spell.SpellSupportResolver;
 import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
 import io.redspace.ironsspellbooks.api.spells.CastType;
 
@@ -13,7 +15,7 @@ import io.redspace.ironsspellbooks.api.spells.CastType;
  * registry, player-only spells included (audit SPI-002). It is now a thin reader over
  * {@link SpellManifest}, the reviewed per-spell list derived from the Iron's jar this build was checked
  * against, and it <b>fails closed</b>: a spell the manifest does not cover is
- * {@link SpellManifest.Capability#UNVERIFIED} and is not cast unless the server operator opts in with
+ * {@link SpellCapability#UNVERIFIED} and is not cast unless the server operator opts in with
  * {@code spells.allowUnverifiedSpells}.
  *
  * <p>Lives in {@code integration.irons} (it imports {@link AbstractSpell}); only classloaded when
@@ -37,14 +39,55 @@ public final class SpellCompat {
     }
 
     /** @return the reviewed capability for {@code spell}. */
-    public static SpellManifest.Capability capabilityOf(AbstractSpell spell) {
+    public static SpellCapability capabilityOf(AbstractSpell spell) {
         return SpellManifest.capabilityOf(spell == null ? null : spell.getSpellResource());
+    }
+
+    /** @return the capability <em>and</em> the layer that decided it (override/manifest/table/trust). */
+    public static SpellSupportResolver.Verdict verdictOf(AbstractSpell spell) {
+        return SpellManifest.verdictOf(spell == null ? null : spell.getSpellResource());
+    }
+
+    /** @return which layer decided this spell's capability, for the diagnostics' provenance column. */
+    public static SpellSupportResolver.Provenance provenanceOf(AbstractSpell spell) {
+        return verdictOf(spell).provenance();
+    }
+
+    /**
+     * @return true if the session should install target cast data for this spell whenever the caster
+     *         has a live target, rather than because the spell demands it. That is the whole of what
+     *         {@link SpellCapability#ADDON_DEFAULT} buys a namespace-trusted spell: a single-target
+     *         add-on spell finds the data it looks for, and a spell that builds its own overwrites it.
+     */
+    public static boolean suppliesTargetOpportunistically(AbstractSpell spell) {
+        return capabilityOf(spell) == SpellCapability.ADDON_DEFAULT;
+    }
+
+    /**
+     * @return the layers that can change this verdict, named in the order an operator should try
+     *         them: the datapack manifest first (shareable and per-spell), then namespace trust, then
+     *         the global opt-in. For a spell some layer already decided <em>against</em>, the source
+     *         that decided is named, because editing anything else will not help.
+     */
+    public static String fixHint(AbstractSpell spell) {
+        SpellSupportResolver.Verdict verdict = verdictOf(spell);
+        String namespace = spell == null || spell.getSpellResource() == null
+                ? "<namespace>" : spell.getSpellResource().getNamespace();
+        if (verdict.provenance() != SpellSupportResolver.Provenance.UNVERIFIED
+                && !verdict.capability().supported()) {
+            return "its capability " + verdict.capability().name() + " comes from " + verdict.source()
+                    + "; change it there, or add a data/" + namespace
+                    + "/spell_manifests/*.json entry, to cast it anyway";
+        }
+        return "declare it in a spell manifest (data/" + namespace + "/spell_manifests/*.json), or add \""
+                + namespace + "\" to spells.trustedNamespaces, or set spells.allowUnverifiedSpells = true "
+                + "to cast every unverified spell at your own risk";
     }
 
     /** @return the support verdict for {@code spell}, honouring the unverified opt-in. */
     public static Support supportOf(AbstractSpell spell) {
-        SpellManifest.Capability capability = capabilityOf(spell);
-        if (capability == SpellManifest.Capability.UNVERIFIED) {
+        SpellCapability capability = capabilityOf(spell);
+        if (capability == SpellCapability.UNVERIFIED) {
             return Support.UNVERIFIED;
         }
         return capability.supported() ? Support.SUPPORTED : Support.UNSUPPORTED;
@@ -65,12 +108,12 @@ public final class SpellCompat {
 
     /** @return true if the spell reads a single {@code TargetEntityCastData} the session must supply. */
     public static boolean requiresTargetEntity(AbstractSpell spell) {
-        return capabilityOf(spell) == SpellManifest.Capability.TARGET_ENTITY;
+        return capabilityOf(spell) == SpellCapability.TARGET_ENTITY;
     }
 
     /** @return a short, actionable reason {@code spell} is not being cast, for logs and diagnostics. */
     public static String unsupportedReason(AbstractSpell spell) {
-        SpellManifest.Capability capability = capabilityOf(spell);
+        SpellCapability capability = capabilityOf(spell);
         return switch (capability) {
             case MULTI_TARGET -> "it reads multi-target cast data that nothing builds for a mob";
             case PLAYER_ONLY -> "Iron's refuses this spell for any caster that is not a player";
@@ -78,9 +121,8 @@ public final class SpellCompat {
                     + "(teleport destination / dash direction / aiming data) that a foreign mob cannot supply";
             case UTILITY_NON_COMBAT -> "it manipulates blocks rather than fighting, so it does nothing useful "
                     + "for an NPC";
-            case UNVERIFIED -> "its mob-cast behaviour has not been verified against Iron's "
-                    + SpellManifest.VERIFIED_AGAINST + " (set spells.allowUnverifiedSpells = true to "
-                    + "cast it anyway, at your own risk)";
+            case UNVERIFIED -> "no layer states what this spell needs of a mob (built-in table verified "
+                    + "against Iron's " + SpellManifest.VERIFIED_AGAINST + "): " + fixHint(spell);
             default -> "unsupported";
         };
     }
@@ -104,6 +146,31 @@ public final class SpellCompat {
             return 0;
         }
         return Math.max(0, spell.getEffectiveCastTime(level, caster));
+    }
+
+    /**
+     * @return whether {@code spell} actually charges — Iron's {@code LONG} or {@code CONTINUOUS} —
+     *         rather than resolving on the tick it starts.
+     */
+    public static boolean hasCastDuration(AbstractSpell spell) {
+        return spell.getCastType() == CastType.LONG || spell.getCastType() == CastType.CONTINUOUS;
+    }
+
+    /**
+     * As {@link #effectiveCastTime(AbstractSpell, int, net.minecraft.world.entity.LivingEntity)}, with
+     * the loadout's per-spell overrides applied by
+     * {@link com.otectus.magicnpcs.core.loadout.CastTimeResolver}.
+     *
+     * @param absoluteTicks per-spell {@code cast_time} in ticks, or {@code null}
+     * @param multiplier    per-spell {@code cast_time_multiplier}, or {@code null}
+     * @return the cast duration in ticks for this one cast; both overrides are ignored (and 0 is
+     *         returned) for a spell with no cast duration
+     */
+    public static int effectiveCastTime(AbstractSpell spell, int level,
+                                        net.minecraft.world.entity.LivingEntity caster,
+                                        Integer absoluteTicks, Double multiplier) {
+        return com.otectus.magicnpcs.core.loadout.CastTimeResolver.resolve(hasCastDuration(spell),
+                effectiveCastTime(spell, level, caster), absoluteTicks, multiplier);
     }
 
     /**

@@ -36,6 +36,7 @@ import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
 import net.minecraftforge.event.entity.EntityLeaveLevelEvent;
 import net.minecraftforge.event.entity.living.LivingEvent;
+import net.minecraftforge.event.server.ServerStartedEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 import java.util.ArrayDeque;
@@ -102,8 +103,21 @@ public class IronsSpellcasterHandler {
 
     private record QueuedReconcile(ServerLevel level, UUID entityId, ReconcileReason reason) {}
 
+    /**
+     * Reconcile the checked-in spell manifest against the registry Iron's actually built, once the
+     * server is up and every mod has registered. Logs a WARN per stale row; see
+     * {@link ManifestReconciler}.
+     */
+    @SubscribeEvent
+    public void onServerStarted(ServerStartedEvent event) {
+        ManifestReconciler.runOnce();
+    }
+
     @SubscribeEvent
     public void onAddReloadListener(AddReloadListenerEvent event) {
+        // Manifests first: the loadout validation and the school pools that follow in this same reload
+        // must see the capabilities the new datapack declares, not the previous reload's.
+        event.addListener(new com.otectus.magicnpcs.core.spell.SpellManifestLoader());
         event.addListener(new LoadoutManager());
         // Report school pool composition once per reload, so a school that can never be assigned is
         // visible in the log without anyone running a command (W4).
@@ -153,6 +167,19 @@ public class IronsSpellcasterHandler {
         MagicNpcs.LOGGER.info("[magicnpcs] {} — queued {} loaded mob(s) for reconciliation "
                         + "against catalog generation {}",
                 reason.name().toLowerCase(Locale.ROOT), queued, pendingGeneration);
+    }
+
+    /**
+     * Step the spell audit, when one is running. Kept apart from the reconcile tick because it is an
+     * operator tool with a very different failure mode: an audit that throws must not take the queue
+     * that keeps every caster's goal correct down with it.
+     */
+    @SubscribeEvent
+    public void onAuditTick(TickEvent.ServerTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) {
+            return;
+        }
+        SpellAuditRun.active().ifPresent(run -> run.tick(event.getServer()));
     }
 
     /** Drain the reconciliation queue in bounded batches so a large world does not stall a tick. */

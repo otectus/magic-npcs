@@ -39,6 +39,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * The one idempotent way a mob's managed casting state is brought in line with what it <em>should</em>
@@ -220,6 +221,11 @@ public final class CasterReconciler {
         double desiredMax = desiredMaxMana(mob, loadout.maxMana());
         maxMana.setBaseValue(desiredMax);
         manaRegen.setBaseValue(loadout.manaRegen());
+        // setBaseValue silently clamps to the attribute's range, so an attribute mod can leave a
+        // caster with a fraction of the mana its loadout asked for and nothing anywhere says so.
+        // /magicnpcs why reports it as [MANA_CLAMPED]; this is the same fact in the log, once.
+        reportClamp(mob, "max_mana", desiredMax, maxMana.getBaseValue());
+        reportClamp(mob, "mana_regen", loadout.manaRegen(), manaRegen.getBaseValue());
         if (state.claimManaInitialisation()) {
             IronsBridge.initMana(mob); // first activation only — a reload is not free healing
         } else {
@@ -247,6 +253,9 @@ public final class CasterReconciler {
                             + " spell(s), none castable — run /magicnpcs validate");
         }
         mob.goalSelector.addGoal(priority, goal);
+        // Stamp the heartbeat now so a caster that was reconciled this tick is not reported stale by
+        // /magicnpcs why before the goal selector has had its first pass at it.
+        state.heartbeat(mob.tickCount);
         // One priority below the casting goal: it only ever runs while the mob's own attack AI is
         // suppressed, so there is nothing at that priority left to contend with, and keeping it
         // distinct makes the /magicnpcs why goal dump readable.
@@ -567,6 +576,28 @@ public final class CasterReconciler {
     }
 
     // --- mana scaling --------------------------------------------------------------------------
+
+    /**
+     * Caster UUIDs already warned about a clamped mana attribute. Bounded, and cleared wholesale
+     * rather than pruned: it exists only to keep a per-tick reconcile from repeating one debug line.
+     */
+    private static final Set<UUID> CLAMP_REPORTED = new HashSet<>();
+
+    /** Log once per caster when an attribute mod's range cap ate the value we asked for. */
+    private static void reportClamp(Mob mob, String attribute, double wanted, double actual) {
+        if (Math.abs(wanted - actual) <= 0.5) {
+            return;
+        }
+        if (CLAMP_REPORTED.size() > 512) {
+            CLAMP_REPORTED.clear();
+        }
+        if (!CLAMP_REPORTED.add(mob.getUUID())) {
+            return;
+        }
+        MagicNpcs.LOGGER.debug("[magicnpcs] {} ({}): {} clamped to {} (wanted {}) — an attribute range "
+                        + "cap applies; see /magicnpcs why [MANA_CLAMPED]",
+                mob.getName().getString(), EntityType.getKey(mob.getType()), attribute, actual, wanted);
+    }
 
     static double desiredMaxMana(Mob mob, double baseMana) {
         return baseMana

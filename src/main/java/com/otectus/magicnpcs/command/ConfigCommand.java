@@ -12,6 +12,7 @@ import com.otectus.magicnpcs.core.caster.ManagedCasterState;
 import com.otectus.magicnpcs.core.loadout.LoadoutCatalog;
 import com.otectus.magicnpcs.core.loadout.LoadoutManager;
 import com.otectus.magicnpcs.integration.irons.IronsSpellcasterHandler;
+import com.otectus.magicnpcs.integration.irons.ManifestReconciler;
 import com.otectus.magicnpcs.integration.irons.SpellManifest;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
@@ -71,6 +72,7 @@ public final class ConfigCommand {
                 counts.discovered() + " / " + counts.active() + " / " + counts.shadowed()
                         + " / " + counts.suppressed() + " / " + counts.rejected(),
                 counts.rejected() > 0 ? ChatFormatting.RED : ChatFormatting.WHITE);
+        row(src, "skipped (mod absent)", String.valueOf(counts.inapplicable()), ChatFormatting.WHITE);
         int pending = IronsSpellcasterHandler.pendingReconciles();
         row(src, "mobs queued for reconciliation", String.valueOf(pending),
                 pending > 0 ? ChatFormatting.YELLOW : ChatFormatting.GREEN);
@@ -92,10 +94,26 @@ public final class ConfigCommand {
         // CustomNPCs reports a status rather than presence: the bridge can be installed and still be
         // off (unsupported build, failed probe, tripped breaker), and "present" would hide that.
         row(src, "CustomNPCs", CustomNpcsCompat.statusLine(), customNpcsColour());
-        row(src, "mob-cast manifest", SpellManifest.size() + " spells verified against Iron's "
+        row(src, "mob-cast manifest", SpellManifest.verifiedCount() + " spells verified against Iron's "
                 + SpellManifest.VERIFIED_AGAINST, ChatFormatting.WHITE);
+        // Manifest rows with no registered spell (stale after an Iron's update) and registered
+        // Iron's spells the manifest never lists; computed once at server start.
+        row(src, "manifest vs registry", ManifestReconciler.summary(),
+                ManifestReconciler.current().map(r -> r.unregistered().isEmpty()).orElse(true)
+                        ? ChatFormatting.WHITE : ChatFormatting.YELLOW);
         row(src, "spells.allowUnverifiedSpells", String.valueOf(MagicNpcsConfig.allowUnverifiedSpells()),
                 MagicNpcsConfig.allowUnverifiedSpells() ? ChatFormatting.YELLOW : ChatFormatting.GREEN);
+        // The other three layers that can decide a spell's capability, so "why is this add-on spell
+        // castable (or not)" is answerable from one screen.
+        java.util.Set<String> trusted = MagicNpcsConfig.trustedNamespaces();
+        row(src, "spells.trustedNamespaces", trusted.isEmpty() ? "none" : String.join(", ", trusted),
+                trusted.isEmpty() ? ChatFormatting.WHITE : ChatFormatting.YELLOW);
+        row(src, "spells.capabilityOverrides",
+                MagicNpcsConfig.capabilityOverrides().size() + " spell(s)", ChatFormatting.WHITE);
+        row(src, "spell manifests",
+                com.otectus.magicnpcs.core.spell.SpellManifestStore.sources().size() + " file(s), "
+                        + com.otectus.magicnpcs.core.spell.SpellManifestStore.snapshot().size() + " spell(s)",
+                ChatFormatting.WHITE);
 
         // --- casting policy --------------------------------------------------------------------
         header(src, "casting policy");

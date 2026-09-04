@@ -3,6 +3,7 @@ package com.otectus.magicnpcs.integration.irons;
 import com.otectus.magicnpcs.MagicNpcs;
 import com.otectus.magicnpcs.api.event.MagicNpcCastEvent;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
+import com.otectus.magicnpcs.core.caster.CasterFacing;
 import com.otectus.magicnpcs.core.caster.MagicNpcEvents;
 import io.redspace.ironsspellbooks.api.magic.MagicData;
 import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
@@ -69,6 +70,7 @@ public final class MobCastSession {
 
     private LivingEntity target;
     private State state = State.CHANNELLING;
+    private int lastTickedAt = Integer.MIN_VALUE;
     private boolean effectCommitted;
 
     /** Where a session ended up. Only {@link #COMPLETE} means the spell's effect actually landed. */
@@ -156,6 +158,19 @@ public final class MobCastSession {
      */
     public static Start begin(Mob caster, LivingEntity target, AbstractSpell spell, int level,
                               MagicNpcCastEvent.CastSource eventSource) {
+        return begin(caster, target, spell, level,
+                SpellCompat.effectiveCastTime(spell, level, caster), eventSource);
+    }
+
+    /**
+     * As {@link #begin(Mob, LivingEntity, AbstractSpell, int, MagicNpcCastEvent.CastSource)}, with an
+     * explicit duration for this cast only; the shared spell object is never modified.
+     *
+     * @param resolvedCastTime the cast duration in ticks, already resolved from the loadout's
+     *                         {@code cast_time} / {@code cast_time_multiplier} overrides
+     */
+    public static Start begin(Mob caster, LivingEntity target, AbstractSpell spell, int level,
+                              int resolvedCastTime, MagicNpcCastEvent.CastSource eventSource) {
         if (!IronsBridge.isAllowedSpell(spell)) {
             return refuse(RefusalReason.BLACKLISTED, spell, caster, null);
         }
@@ -163,41 +178,27 @@ public final class MobCastSession {
             return refuse(RefusalReason.NOT_CASTABLE_BY_MOB, spell, caster,
                     SpellCompat.unsupportedReason(spell));
         }
-        boolean needsTarget = SpellCompat.requiresTargetEntity(spell);
-        if (needsTarget && target == null) {
+        boolean requiresTarget = SpellCompat.requiresTargetEntity(spell);
+        if (requiresTarget && target == null) {
             return refuse(RefusalReason.NEEDS_TARGET, spell, caster, null);
         }
         if (!IronsBridge.canAfford(caster, spell, level)) {
             return refuse(RefusalReason.INSUFFICIENT_MANA, spell, caster, null);
         }
-        MagicData data = MagicData.getPlayerMagicData(caster);
-        if (data.isCasting()) {
-            // Never stomp a channel that is already running: initiateCast would overwrite its state
-            // and Iron's would finish the wrong spell against the wrong cast data.
-            return refuse(RefusalReason.ALREADY_CASTING, spell, caster, null);
-        }
 
-        boolean ownsCastData = installCastData(data, spell, target, needsTarget);
-        // Every spell gets its own pre-cast step, not just the target-locked ones. Many Iron's spells
-        // BUILD their cast data here rather than in onCast: HasteSpell's checkPreCastConditions
-        // raycasts for a target via Utils.preCastTargetHelper, spawns a TargetedAreaEntity and installs
-        // the cast data its onCast then requires. Skipping this for non-target spells left roughly
-        // twenty of them — haste, blessing_of_life, healing_circle, sunbeam, chain_lightning, slow,
-        // wololo, arrow_volley, blight, earthquake and more — doing nothing at all.
-        if (!spell.checkPreCastConditions(caster.level(), level, caster, data)) {
-            if (ownsCastData || data.getAdditionalCastData() != null) {
-                data.resetAdditionalCastData();
-            }
-            return refuse(RefusalReason.PRE_CAST_REFUSED, spell, caster, null);
+        Prepared prepared = prepare(caster, target, spell, level);
+        if (!prepared.passed()) {
+            return refuse(prepared.refusal(), spell, caster, null);
         }
+        MagicData data = prepared.data();
 
         MobCastSession session = new MobCastSession(caster, target, spell, level, data,
-                ownsCastData || data.getAdditionalCastData() != null, eventSource);
+                prepared.ownsCastData() || data.getAdditionalCastData() != null, eventSource);
         // Publish "this mob is mid-cast" where the vanilla-side movement goal can see it without
         // importing Iron's. A caster that strafes through its own channel throws away the aim it
         // takes every tick.
         com.otectus.magicnpcs.core.caster.ManagedCasterState.of(caster).setChannelling(true);
-        int castTime = SpellCompat.effectiveCastTime(spell, level, caster);
+        int castTime = Math.max(0, resolvedCastTime);
         data.initiateCast(spell, level, castTime, CastSource.MOB, SLOT);
         spell.onServerPreCast(caster.level(), level, caster, data);
         // The transaction point: Iron's has accepted the cast and owns the state from here.
@@ -211,6 +212,61 @@ public final class MobCastSession {
     }
 
     /**
+     * The outcome of {@link #prepare}: the caster's magic data, whether this call installed the cast
+     * data (and must therefore clean it up), and either a pass or the reason Iron's said no.
+     *
+     * @param refusal the reason the preparation failed, or {@code null} when it passed
+     */
+    record Prepared(MagicData data, boolean ownsCastData, boolean passed, RefusalReason refusal) {}
+
+    /**
+     * Everything that has to be true — and true <em>in this order</em> — before Iron's will accept a
+     * cast: the caster is not already channelling, the cast data the spell reads is installed, and the
+     * spell's own pre-cast check passes.
+     *
+     * <p><b>Why the facing snap lives here.</b> Iron's target helpers ({@code Utils.preCastTargetHelper},
+     * which roughly twenty spells call from {@code checkPreCastConditions}) raycast along the caster's
+     * current facing and never consult a pre-installed {@code TargetEntityCastData}. A caster that has
+     * not turned toward its target yet is refused before the cast starts, whatever we installed. Doing
+     * the snap in the casting goal alone was not enough: the audit probe and every non-ATTACK role went
+     * without it, so it belongs on the one path all of them share.
+     *
+     * <p>Nothing is charged here; a refusal is free.
+     */
+    static Prepared prepare(Mob caster, LivingEntity target, AbstractSpell spell, int level) {
+        // A namespace-trusted add-on spell is not known to need a target, so it must stay castable
+        // without one - but when the caster does have one, giving it the same TargetEntityCastData a
+        // verified TARGET_ENTITY spell gets costs nothing (a spell that builds its own overwrites it)
+        // and is what makes single-target add-on spells work with no manifest at all.
+        boolean needsTarget = SpellCompat.requiresTargetEntity(spell)
+                || (SpellCompat.suppliesTargetOpportunistically(spell) && target != null);
+        MagicData data = MagicData.getPlayerMagicData(caster);
+        if (data.isCasting()) {
+            // Never stomp a channel that is already running: initiateCast would overwrite its state
+            // and Iron's would finish the wrong spell against the wrong cast data.
+            return new Prepared(data, false, false, RefusalReason.ALREADY_CASTING);
+        }
+        if (needsTarget && target != null) {
+            CasterFacing.snap(caster, target);
+        }
+
+        boolean ownsCastData = installCastData(data, spell, target, needsTarget);
+        // Every spell gets its own pre-cast step, not just the target-locked ones. Many Iron's spells
+        // BUILD their cast data here rather than in onCast: HasteSpell's checkPreCastConditions
+        // raycasts for a target via Utils.preCastTargetHelper, spawns a TargetedAreaEntity and installs
+        // the cast data its onCast then requires. Skipping this for non-target spells left roughly
+        // twenty of them — haste, blessing_of_life, healing_circle, sunbeam, chain_lightning, slow,
+        // wololo, arrow_volley, blight, earthquake and more — doing nothing at all.
+        if (!spell.checkPreCastConditions(caster.level(), level, caster, data)) {
+            if (ownsCastData || data.getAdditionalCastData() != null) {
+                data.resetAdditionalCastData();
+            }
+            return new Prepared(data, ownsCastData, false, RefusalReason.PRE_CAST_REFUSED);
+        }
+        return new Prepared(data, ownsCastData, true, null);
+    }
+
+    /**
      * Install the cast data the spell needs before its pre-cast check runs.
      *
      * @return true if this session installed the data and must clean it up
@@ -219,7 +275,7 @@ public final class MobCastSession {
                                            boolean needsTarget) {
         if (needsTarget) {
             // Set the target BEFORE the pre-cast check — root/devour/wisp and friends read it there.
-            // A spell that raycasts for its own target simply overwrites this; because the goal snaps
+            // A spell that raycasts for its own target simply overwrites this; because prepare snaps
             // the caster's facing at the target first, that raycast lands on the same entity anyway,
             // and this is the fallback for when it does not.
             data.setAdditionalCastData(new TargetEntityCastData(target));
@@ -251,12 +307,21 @@ public final class MobCastSession {
     /**
      * Advance the cast by one server tick, in Iron's canonical order.
      *
+     * <p>At most one advance per server tick: a goal started this tick is also ticked this tick by
+     * {@code GoalSelector.tickRunningGoals(true)}, so before this guard a {@code windup: 0} LONG cast
+     * advanced twice on its start tick and finished one tick early. INSTANT casts are unaffected —
+     * their first advance completes them, and the session is no longer channelling.
+     *
      * @return true while the session is still running; false once it has completed or cancelled
      */
     public boolean tick() {
         if (state != State.CHANNELLING) {
             return false;
         }
+        if (caster.tickCount == lastTickedAt) {
+            return true;
+        }
+        lastTickedAt = caster.tickCount;
         data.handleCastDuration();
         if (data.isCasting()) {
             spell.onServerCastTick(caster.level(), level, caster, data);

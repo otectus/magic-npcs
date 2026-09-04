@@ -21,7 +21,8 @@ import java.util.List;
  * @param status      the resource's fate — see {@link Status}
  * @param entityType  the declared entity type, or {@code null} when parsing failed before reading it
  * @param profession  the declared villager profession, or {@code null}
- * @param loadout     the parsed loadout, or {@code null} for a {@link Status#REJECTED} resource
+ * @param loadout     the parsed loadout, or {@code null} for a {@link Status#REJECTED} or
+ *                    {@link Status#INAPPLICABLE} resource
  * @param problems    every problem found, most severe first is not guaranteed — read {@link #worst()}
  * @param contentHash a stable digest of the file's canonical JSON, so a reconciler can tell "the same
  *                    loadout came back" from "the author edited it" without deep-comparing records
@@ -47,7 +48,13 @@ public record LoadoutRecord(
         /** Parsed, but {@code "enabled": false} makes it inert (and possibly kills its group). */
         SUPPRESSED,
         /** Could not be parsed or failed validation. Never used at runtime; kept for diagnostics. */
-        REJECTED;
+        REJECTED,
+        /**
+         * Well-formed, but it names a mod that is not installed, so it cannot apply here. Terminal like
+         * {@link #REJECTED} and never used at runtime, but not a failure: it carries INFO problems
+         * only, and every report prints it as skipped (0.9.0, I1).
+         */
+        INAPPLICABLE;
 
         public boolean isUsable() {
             return this == ACTIVE;
@@ -91,6 +98,30 @@ public record LoadoutRecord(
         }
         return false;
     }
+
+    /**
+     * The namespace of the absent mod that made this record {@link Status#INAPPLICABLE}.
+     *
+     * <p>Read back out of the {@code MOD_ABSENT}/{@code SPELL_MOD_ABSENT} problem the parser wrote,
+     * which is the only place the namespace survives — the id itself is dropped precisely because it
+     * cannot be resolved.
+     */
+    public java.util.Optional<String> absentNamespace() {
+        for (LoadoutProblem p : problems) {
+            if (!p.code().equals("MOD_ABSENT") && !p.code().equals("SPELL_MOD_ABSENT")) {
+                continue;
+            }
+            java.util.regex.Matcher m = ABSENT_MOD.matcher(p.message());
+            if (m.find()) {
+                return java.util.Optional.of(m.group(1));
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
+    /** Matches the {@code mod 'namespace'} the parser always names in an absent-mod message. */
+    private static final java.util.regex.Pattern ABSENT_MOD =
+            java.util.regex.Pattern.compile("mod '([^']+)'");
 
     /** {@code my_magic:skeleton (pack my_magic) [datapack]} — names the file a message is about. */
     public String describeSource() {

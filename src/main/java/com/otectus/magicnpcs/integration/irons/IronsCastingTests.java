@@ -1,5 +1,6 @@
 package com.otectus.magicnpcs.integration.irons;
 
+import com.otectus.magicnpcs.api.event.MagicNpcCastEvent;
 import com.otectus.magicnpcs.compat.RecruitsCompat;
 import com.otectus.magicnpcs.compat.recruits.RecruitsTestSupport;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
@@ -15,6 +16,7 @@ import com.otectus.magicnpcs.core.util.AttackGoals;
 import com.otectus.magicnpcs.core.loadout.SpellcasterLoadout;
 import io.redspace.ironsspellbooks.api.magic.MagicData;
 import io.redspace.ironsspellbooks.api.registry.AttributeRegistry;
+import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -32,7 +34,10 @@ import net.minecraft.world.entity.npc.VillagerProfession;
 import net.minecraft.world.entity.projectile.AbstractArrow;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -1107,5 +1112,509 @@ public final class IronsCastingTests {
                 null, null, 1, new ResourceLocation("magicnpcs", "gametest_standoff"), false, true,
                 com.otectus.magicnpcs.core.loadout.LoadoutSourceTier.DATAPACK, null,
                 com.otectus.magicnpcs.core.loadout.NativeAttackPolicy.SUPPRESS, null);
+    }
+
+    // --- 0.9.0: native cast-time override --------------------------------------------------------
+
+    private static final ResourceLocation GRAVITY_FISSURE =
+            new ResourceLocation("irons_spellbooks", "gravity_fissure");
+
+    /**
+     * The headline case: Gravity Fissure is a LONG cast with a 15-tick native charge, and
+     * {@code cast_time_multiplier: 0.5} must make the caster charge it for 8 ticks — not 15, and not
+     * 8 "goal ticks" (the session advances at most once per game tick). Mana is charged once and one
+     * cooldown is started, so the shortened charge is not a second cast.
+     */
+    public static void gravityFissureHalfMultiplierCastsInEightTicks(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        double maxMana = primeMana(helper, caster, 600.0);
+        LoadoutEntry entry = new LoadoutEntry(GRAVITY_FISSURE, 1, 1, 0.0, 16.0, 4.0,
+                LoadoutEntry.Role.ATTACK, 1.0, 400, null, null, 0.5, 0, null,
+                false, List.of(), LoadoutEntry.HandRequirement.EITHER);
+        NpcSpellAttackGoal goal = installCastTimeGoal(caster, 600.0, entry);
+        Zombie target = pinnedTarget(helper);
+
+        int[] window = {-1, -1};       // first channelling tick / first tick after the channel
+        int[] manaDrops = {0};
+        float[] lastMana = {(float) maxMana};
+        helper.startSequence()
+                .thenExecuteFor(200, () -> {
+                    caster.setTarget(target);
+                    observeSession(caster, goal, window);
+                    float mana = MagicData.getPlayerMagicData(caster).getMana();
+                    if (mana < lastMana[0] - 0.5f) {
+                        manaDrops[0]++;
+                    }
+                    lastMana[0] = mana;
+                })
+                .thenExecute(() -> {
+                    helper.assertTrue(window[1] > 0, "gravity_fissure never completed its channel");
+                    int delta = window[1] - window[0];
+                    helper.assertTrue(delta == 8, "cast_time_multiplier 0.5 on a 15-tick charge must "
+                            + "channel for 8 ticks, channelled for " + delta);
+                    helper.assertTrue(manaDrops[0] == 1,
+                            "mana must be deducted once per cast, saw " + manaDrops[0] + " deductions");
+                    ManagedCasterState state = ManagedCasterState.peek(caster);
+                    helper.assertTrue(state != null
+                                    && state.cooldownRemaining(GRAVITY_FISSURE, caster.tickCount) > 0,
+                            "the cast must have started exactly one cooldown");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * {@code windup} and {@code cast_time} are different delays and must both apply: the Magic NPCs
+     * wind-up runs first (nothing is charged yet), then the native charge runs for the absolute
+     * {@code cast_time}. An absolute value also wins over a multiplier on the same entry.
+     */
+    public static void gravityFissureAbsoluteSixWithWindupSix(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 600.0);
+        LoadoutEntry entry = new LoadoutEntry(GRAVITY_FISSURE, 1, 1, 0.0, 16.0, 4.0,
+                LoadoutEntry.Role.ATTACK, 1.0, 400, null, 6, 0.5, 6, null,
+                false, List.of(), LoadoutEntry.HandRequirement.EITHER);
+        NpcSpellAttackGoal goal = installCastTimeGoal(caster, 600.0, entry);
+        Zombie target = pinnedTarget(helper);
+
+        int[] window = {-1, -1};
+        int[] firstTick = {-1};
+        helper.startSequence()
+                .thenExecuteFor(200, () -> {
+                    if (firstTick[0] < 0) {
+                        firstTick[0] = caster.tickCount;
+                    }
+                    caster.setTarget(target);
+                    observeSession(caster, goal, window);
+                })
+                .thenExecute(() -> {
+                    helper.assertTrue(window[1] > 0, "gravity_fissure never completed its channel");
+                    int windup = window[0] - firstTick[0];
+                    // canUse() is only evaluated on alternating ticks, so the wind-up start is not
+                    // tick-exact; the charge itself is.
+                    helper.assertTrue(windup >= 6 && windup <= 12,
+                            "the channel should start about 6 ticks after the goal does, started after "
+                                    + windup);
+                    int delta = window[1] - window[0];
+                    helper.assertTrue(delta == 6,
+                            "cast_time 6 must win over cast_time_multiplier 0.5, channelled for " + delta);
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Backward compatibility: an entry with neither override channels for exactly Iron's own effective
+     * cast time, with no normalisation of any kind.
+     */
+    public static void noOverrideKeepsIronsEffectiveDuration(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 600.0);
+        LoadoutEntry entry = new LoadoutEntry(GRAVITY_FISSURE, 1, 1, 0.0, 16.0, 4.0,
+                LoadoutEntry.Role.ATTACK, 1.0, 400, null, null, null, 0, null,
+                false, List.of(), LoadoutEntry.HandRequirement.EITHER);
+        NpcSpellAttackGoal goal = installCastTimeGoal(caster, 600.0, entry);
+        Zombie target = pinnedTarget(helper);
+        int expected = SpellCompat.effectiveCastTime(IronsBridge.getSpell(GRAVITY_FISSURE), 1, caster);
+
+        int[] window = {-1, -1};
+        helper.startSequence()
+                .thenExecuteFor(200, () -> {
+                    caster.setTarget(target);
+                    observeSession(caster, goal, window);
+                })
+                .thenExecute(() -> {
+                    helper.assertTrue(window[1] > 0, "gravity_fissure never completed its channel");
+                    int delta = window[1] - window[0];
+                    helper.assertTrue(delta == expected, "with no override the channel must last Iron's "
+                            + expected + " ticks, lasted " + delta);
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * A SCRIPT cast is not the loadout's cast: {@link DetachedCastDriver} keeps Iron's timing even when
+     * the caster's loadout shortens the same spell, so an addon asking for a spell gets the spell it
+     * asked for.
+     */
+    public static void scriptedCastIgnoresLoadoutOverride(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 600.0);
+        LoadoutEntry entry = new LoadoutEntry(GRAVITY_FISSURE, 1, 1, 0.0, 16.0, 4.0,
+                LoadoutEntry.Role.ATTACK, 1.0, 400, null, null, 0.5, 0, null,
+                false, List.of(), LoadoutEntry.HandRequirement.EITHER);
+        installCastTimeGoal(caster, 600.0, entry);
+        Zombie target = pinnedTarget(helper);
+        int expected = SpellCompat.effectiveCastTime(IronsBridge.getSpell(GRAVITY_FISSURE), 1, caster);
+
+        helper.startSequence()
+                .thenExecute(() -> helper.assertTrue(
+                        DetachedCastDriver.cast(caster, target, GRAVITY_FISSURE, 1).started(),
+                        "the scripted cast should have started"))
+                .thenExecute(() -> helper.assertTrue(
+                        MagicData.getPlayerMagicData(caster).getCastDurationRemaining() == expected,
+                        "a SCRIPT cast must use Iron's " + expected + "-tick charge, not the loadout's, got "
+                                + MagicData.getPlayerMagicData(caster).getCastDurationRemaining()))
+                .thenSucceed();
+    }
+
+    /**
+     * The double-tick guard: a goal started this tick is also ticked this tick by
+     * {@code GoalSelector.tickRunningGoals(true)}, so the session may only advance once per game tick.
+     * Two extra {@code tick()} calls inside one game tick must not steal a tick from the charge.
+     */
+    public static void sameTickDoubleTickIsIgnored(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 600.0);
+        LoadoutEntry entry = new LoadoutEntry(GRAVITY_FISSURE, 1, 1, 0.0, 16.0, 4.0,
+                LoadoutEntry.Role.ATTACK, 1.0, 400, null, 40, null, 0, null,
+                false, List.of(), LoadoutEntry.HandRequirement.EITHER);
+        NpcSpellAttackGoal goal = installCastTimeGoal(caster, 600.0, entry);
+        Zombie target = pinnedTarget(helper);
+
+        int[] remaining = {-1};
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    caster.setTarget(target);
+                    MobCastSession session = goal.session();
+                    helper.assertTrue(session != null && session.isRunning(),
+                            "waiting for the channel to start");
+                })
+                .thenExecute(() -> {
+                    caster.setTarget(target);
+                    remaining[0] = MagicData.getPlayerMagicData(caster).getCastDurationRemaining();
+                })
+                .thenExecute(() -> {
+                    caster.setTarget(target);
+                    // The goal selector already ticked the goal this game tick, so these two are no-ops.
+                    goal.tick();
+                    goal.tick();
+                    int now = MagicData.getPlayerMagicData(caster).getCastDurationRemaining();
+                    helper.assertTrue(remaining[0] - now == 1,
+                            "the session must advance exactly one tick per game tick, advanced "
+                                    + (remaining[0] - now));
+                })
+                .thenSucceed();
+    }
+
+    /** Install a bare casting goal (no other AI) over these entries and return it for the assertions. */
+    private static NpcSpellAttackGoal installCastTimeGoal(Mob caster, double maxMana,
+                                                          LoadoutEntry... entries) {
+        SpellcasterLoadout loadout = new SpellcasterLoadout(
+                EntityType.getKey(caster.getType()), maxMana, 0.0, List.of(entries));
+        caster.goalSelector.removeAllGoals(g -> true);
+        caster.targetSelector.removeAllGoals(g -> true);
+        NpcSpellAttackGoal goal = new NpcSpellAttackGoal(caster, loadout);
+        caster.goalSelector.addGoal(2, goal);
+        return goal;
+    }
+
+    /** A stationary, invulnerable dummy three blocks toward +Z, so nothing can drop the channel. */
+    private static Zombie pinnedTarget(GameTestHelper helper) {
+        Zombie target = helper.spawn(EntityType.ZOMBIE, new BlockPos(1, 2, 3));
+        target.setNoAi(true);
+        target.setNoGravity(true);
+        target.setInvulnerable(true);
+        return target;
+    }
+
+    /**
+     * Record the first channelling tick into {@code window[0]} and the first tick after the channel
+     * into {@code window[1]}, so the difference is the charge measured in real game ticks.
+     */
+    private static void observeSession(Mob caster, NpcSpellAttackGoal goal, int[] window) {
+        MobCastSession session = goal.session();
+        boolean running = session != null && session.isRunning();
+        if (running && window[0] < 0) {
+            window[0] = caster.tickCount;
+        } else if (!running && window[0] >= 0 && window[1] < 0) {
+            window[1] = caster.tickCount;
+        }
+    }
+
+    // --- 0.9.0: out-of-combat SUPPORT regression coverage (ADR 0005) ------------------------------
+
+    private static final ResourceLocation HEAL = new ResourceLocation("irons_spellbooks", "heal");
+    private static final ResourceLocation MAGIC_MISSILE =
+            new ResourceLocation("irons_spellbooks", "magic_missile");
+
+    /**
+     * The spec scenario: a caster at 30% health with a SUPPORT heal and <b>no target</b> heals itself.
+     * Asserted on the public cast events rather than on mana alone, so the test states what a player
+     * would see — a completed heal — and no target is ever set, so nothing but the out-of-combat
+     * SUPPORT path can produce it.
+     */
+    public static void woundedIdleCasterSelfHeals(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 300.0);
+        installCastTimeGoal(caster, 300.0, supportHeal(0));
+        caster.setHealth(caster.getMaxHealth() * 0.3F); // below the default 0.5 support threshold
+        float wounded = caster.getHealth();
+        CastLog log = new CastLog(caster);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    caster.setTarget(null);
+                    helper.assertTrue(log.completed.contains(HEAL),
+                            "waiting for the idle self-heal to complete");
+                })
+                .thenExecute(() -> {
+                    log.close();
+                    helper.assertTrue(caster.getHealth() > wounded,
+                            "the completed heal must actually raise the health of the caster");
+                    helper.assertTrue(caster.getTarget() == null,
+                            "the self-heal must happen with no target at any point");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The opt-out: with {@code supportOutOfCombat} off, the same wounded, targetless caster never even
+     * starts a cast — for longer than a full idle cadence. Runs in its own batch because it mutates a
+     * shared config value; restored before the assertion so it cannot leak into another test.
+     */
+    public static void supportOutOfCombatDisabledNeverCasts(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        boolean prev = MagicNpcsConfig.SUPPORT_OUT_OF_COMBAT.get();
+        MagicNpcsConfig.SUPPORT_OUT_OF_COMBAT.set(false);
+
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 300.0);
+        installCastTimeGoal(caster, 300.0, supportHeal(0));
+        caster.setHealth(caster.getMaxHealth() * 0.3F);
+        CastLog log = new CastLog(caster);
+        int window = MagicNpcsConfig.SUPPORT_OUT_OF_COMBAT_INTERVAL_TICKS.get() + 40;
+
+        helper.startSequence()
+                .thenExecuteFor(window, () -> caster.setTarget(null))
+                .thenExecute(() -> {
+                    MagicNpcsConfig.SUPPORT_OUT_OF_COMBAT.set(prev); // restore before asserting
+                    log.close();
+                    helper.assertTrue(log.started.isEmpty(),
+                            "supportOutOfCombat=false must stop an idle caster casting at all, saw "
+                                    + log.started);
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Acquiring a target must be served at the <b>combat</b> cadence, not at the (much longer) idle
+     * one: a healthy caster that idled first — and therefore holds an idle-cadence deadline — must
+     * still open fire promptly when a hostile appears.
+     */
+    public static void targetAcquisitionUsesCombatCadence(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 600.0);
+        LoadoutEntry attack = new LoadoutEntry(MAGIC_MISSILE, 1, 1, 0.0, 24.0, 1.0,
+                LoadoutEntry.Role.ATTACK, 1.0, null, null, 0, null);
+        installCastTimeGoal(caster, 600.0, supportHeal(0), attack);
+        Zombie target = pinnedTarget(helper);
+        CastLog log = new CastLog(caster);
+        int idle = MagicNpcsConfig.SUPPORT_OUT_OF_COMBAT_INTERVAL_TICKS.get();
+        int budget = MagicNpcsConfig.DECISION_INTERVAL_TICKS.get() + 10; // + a wind-up of 0
+
+        int[] acquiredAt = {-1};
+        helper.startSequence()
+                .thenExecuteFor(40, () -> caster.setTarget(null)) // idle long enough to schedule idly
+                .thenExecute(() -> {
+                    helper.assertTrue(log.started.isEmpty(),
+                            "a healthy caster with no target must not cast at all");
+                    acquiredAt[0] = caster.tickCount;
+                })
+                .thenExecuteFor(budget, () -> caster.setTarget(target))
+                .thenExecute(() -> {
+                    log.close();
+                    helper.assertTrue(log.firstStartedTick >= 0,
+                            "acquiring a target must produce a cast within " + budget + " ticks");
+                    int delay = log.firstStartedTick - acquiredAt[0];
+                    helper.assertTrue(delay <= budget,
+                            "the first cast after acquiring a target came " + delay + " ticks later");
+                    helper.assertTrue(delay < idle,
+                            "a target must not have to wait out the idle cadence (" + idle + " ticks)");
+                    helper.assertTrue(MAGIC_MISSILE.equals(log.started.get(0)),
+                            "the first cast at a hostile target should be the ATTACK spell, was "
+                                    + log.started.get(0));
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * An idle self-heal is not a combat tell: even with a 10-tick wind-up, the out-of-combat path must
+     * never play the telegraph (ADR 0005), so an NPC topping itself up in a village looks like nothing
+     * in particular.
+     */
+    public static void outOfCombatHealSkipsTelegraph(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 300.0);
+        NpcSpellAttackGoal goal = installCastTimeGoal(caster, 300.0, supportHeal(10));
+        caster.setHealth(caster.getMaxHealth() * 0.3F);
+        CastLog log = new CastLog(caster);
+
+        boolean[] sawTelegraph = {false};
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    caster.setTarget(null);
+                    sawTelegraph[0] |= goal.telegraphApplied();
+                    helper.assertTrue(log.completed.contains(HEAL),
+                            "waiting for the wound-up idle self-heal to complete");
+                })
+                .thenExecute(() -> {
+                    log.close();
+                    helper.assertTrue(!sawTelegraph[0],
+                            "an out-of-combat self-heal must not play a wind-up telegraph");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The out-of-combat path is not exempt from the mana economy: a wounded idle caster with no mana
+     * waits, and casts as soon as it can afford the heal.
+     */
+    public static void outOfCombatHealWaitsForMana(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        double maxMana = primeMana(helper, caster, 300.0); // regen 0, so mana only moves when we move it
+        installCastTimeGoal(caster, 300.0, supportHeal(0));
+        caster.setHealth(caster.getMaxHealth() * 0.3F);
+        CastLog log = new CastLog(caster);
+
+        helper.startSequence()
+                .thenExecuteFor(40, () -> {
+                    caster.setTarget(null);
+                    MagicData.getPlayerMagicData(caster).setMana(0.0f);
+                })
+                .thenExecute(() -> helper.assertTrue(log.started.isEmpty(),
+                        "a caster that cannot afford its heal must not start casting"))
+                .thenExecute(() -> MagicData.getPlayerMagicData(caster).setMana((float) maxMana))
+                .thenWaitUntil(() -> {
+                    caster.setTarget(null);
+                    helper.assertTrue(!log.started.isEmpty(),
+                            "waiting for the heal once mana is restored");
+                })
+                .thenExecute(log::close)
+                .thenSucceed();
+    }
+
+    /** A SUPPORT heal entry with the given wind-up; everything else at the usual test defaults. */
+    private static LoadoutEntry supportHeal(int windup) {
+        return new LoadoutEntry(HEAL, 1, 1, 0.0, 0.0, 1.5,
+                LoadoutEntry.Role.SUPPORT, 1.0, null, null, windup, null);
+    }
+
+    /**
+     * 0.9.0 layering: a config capability override outranks the built-in reviewed table, so a spell
+     * this build classified as MULTI_TARGET (uncastable by a mob) becomes castable when the operator
+     * says otherwise - and the diagnostics name the override, not the table, as the layer that decided.
+     */
+    public static void capabilityOverrideEnablesUnsupportedIronsSpell(GameTestHelper helper) {
+        ResourceLocation spellId = new ResourceLocation("irons_spellbooks", "thunder_step");
+        AbstractSpell spell = IronsBridge.getSpell(spellId);
+        helper.assertTrue(spell != null, "thunder_step must be registered for this test to mean anything");
+        helper.assertTrue(!SpellCompat.castableByMob(spell),
+                "thunder_step is MULTI_TARGET in the built-in table, so it must not be castable by default");
+
+        List<? extends String> previous = List.copyOf(MagicNpcsConfig.SPELL_CAPABILITY_OVERRIDES.get());
+        MagicNpcsConfig.SPELL_CAPABILITY_OVERRIDES.set(List.of(spellId + "=DIRECT"));
+        MagicNpcsConfig.invalidateCaches();
+        try {
+            helper.assertTrue(SpellCompat.castableByMob(spell),
+                    "a DIRECT capability override must make the spell castable by a mob");
+            helper.assertTrue(SpellCompat.provenanceOf(spell)
+                            == com.otectus.magicnpcs.core.spell.SpellSupportResolver.Provenance.OVERRIDE,
+                    "the override must be the layer the diagnostics report");
+        } finally {
+            MagicNpcsConfig.SPELL_CAPABILITY_OVERRIDES.set(previous);
+            MagicNpcsConfig.invalidateCaches();
+        }
+        helper.succeed();
+    }
+
+    private static final ResourceLocation ROOT = new ResourceLocation("irons_spellbooks", "root");
+
+    /**
+     * 0.9.0: Iron's target helpers ({@code Utils.preCastTargetHelper}) raycast along the caster's
+     * <em>current</em> facing and ignore any {@code TargetEntityCastData} we installed, so a caster
+     * that has not turned yet is refused before the cast starts. {@link MobCastSession#prepare} snaps
+     * the facing itself now, so a caster spawned looking the other way still starts {@code root}.
+     */
+    public static void targetSpellStartsWhenCasterFacesAway(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 500.0);
+        LoadoutEntry entry = new LoadoutEntry(ROOT, 1, 1, 0.0, 16.0, 1.0,
+                LoadoutEntry.Role.ATTACK, 1.0, null, null, null, null);
+        installCastTimeGoal(caster, 500.0, entry);
+        Zombie target = pinnedTarget(helper); // three blocks toward +Z, i.e. at yaw 0
+        // Face due -Z: everything in front of the caster is empty air.
+        caster.setYRot(180.0F);
+        caster.yRotO = 180.0F;
+        caster.yBodyRot = 180.0F;
+        caster.yBodyRotO = 180.0F;
+        caster.setYHeadRot(180.0F);
+        CastLog log = new CastLog(caster);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    caster.setTarget(target);
+                    helper.assertTrue(log.started.contains(ROOT),
+                            "waiting for root to start with the caster facing away from its target");
+                })
+                .thenExecute(log::close)
+                .thenSucceed();
+    }
+
+    /**
+     * Records the public cast events of one caster, so a test can assert on "a heal completed" rather
+     * than on a mana delta. Registered on the Forge bus for the life of one test; {@code close()}
+     * removes it again so a finished test cannot observe (or hold) anything.
+     */
+    public static final class CastLog {
+        private final Mob caster;
+        final List<ResourceLocation> started = new ArrayList<>();
+        final List<ResourceLocation> completed = new ArrayList<>();
+        int firstStartedTick = -1;
+
+        CastLog(Mob caster) {
+            this.caster = caster;
+            MinecraftForge.EVENT_BUS.register(this);
+        }
+
+        @SubscribeEvent
+        public void onStarted(MagicNpcCastEvent.Started event) {
+            if (event.getCaster() == caster) {
+                if (firstStartedTick < 0) {
+                    firstStartedTick = caster.tickCount;
+                }
+                started.add(event.getSpellId());
+            }
+        }
+
+        @SubscribeEvent
+        public void onCompleted(MagicNpcCastEvent.Completed event) {
+            if (event.getCaster() == caster) {
+                completed.add(event.getSpellId());
+            }
+        }
+
+        void close() {
+            MinecraftForge.EVENT_BUS.unregister(this);
+        }
     }
 }
