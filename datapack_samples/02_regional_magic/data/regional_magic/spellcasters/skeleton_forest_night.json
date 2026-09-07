@@ -1,0 +1,44 @@
+{
+  "_comment": "Four files in this pack all target minecraft:skeleton. They POOL: each skeleton sticky-picks exactly one of the files whose conditions it satisfies, weighted by pool_weight, and remembers that choice. Spell lists are never merged.",
+  "entity_type": "minecraft:skeleton",
+  "pool_weight": 4,
+  "conditions": {
+    "_comment": "A biome entry may be a plain biome id or a #tag. Dimensions are plain ids only - biome tags work here, dimension tags do not.",
+    "dimensions": [
+      "minecraft:overworld"
+    ],
+    "biomes": [
+      "#minecraft:is_forest",
+      "#minecraft:is_taiga",
+      "#minecraft:is_jungle"
+    ],
+    "time": "night",
+    "min_y": 50
+  },
+  "max_mana": 100.0,
+  "mana_regen": 10.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:poison_arrow",
+      "level": 1,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 4.0,
+      "max_range": 22.0,
+      "safety_radius": 1.0,
+      "windup": 15,
+      "cooldown": 100
+    },
+    {
+      "_comment": "root reads a target entity during a channelled cast, so it must be role attack - a support role has no target and the spell would be skipped.",
+      "spell": "irons_spellbooks:root",
+      "level": 1,
+      "weight": 1,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 10.0,
+      "safety_radius": 1.0,
+      "cooldown": 240
+    }
+  ]
+}

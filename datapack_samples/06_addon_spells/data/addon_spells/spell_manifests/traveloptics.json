@@ -1,0 +1,16 @@
+{
+  "_comment": "A spell manifest declares what cast data an add-on spell reads, so Magic NPCs knows whether a mob can supply it. Without a manifest an add-on spell is UNVERIFIED and is skipped rather than cast into the void. The spell ids below are placeholders - replace them with the real ids from the add-on you are declaring.",
+  "format": 1,
+  "verified_against": "traveloptics 1.2.0, cast on a real mob in a test world",
+  "spells": {
+    "traveloptics:tidal_lance": "TARGET_ENTITY",
+    "traveloptics:aqua_affinity": "DIRECT",
+    "traveloptics:tidal_wave": "TARGET_AREA",
+    "traveloptics:riptide_surge": "GROUND_AOE_FORWARD",
+    "traveloptics:call_of_the_deep": "SUMMON"
+  },
+  "_review": [
+    "traveloptics:riptide_surge - direction looked right in three casts, re-check after the next add-on update",
+    "traveloptics:call_of_the_deep - summons despawn quickly for a mob caster, usable but weak"
+  ]
+}

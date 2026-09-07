@@ -1,0 +1,39 @@
+{
+  "_comment": "cooldown_multiplier scales the default cooldown that Irons Spellbooks gives the spell. Below 1.0 is FASTER, above 1.0 is SLOWER - a bigger number means a longer wait.",
+  "entity_type": "minecraft:skeleton",
+  "pool_weight": 5,
+  "conditions": {
+    "dimensions": [
+      "minecraft:the_nether"
+    ],
+    "biomes": [
+      "#minecraft:is_nether"
+    ]
+  },
+  "max_mana": 130.0,
+  "mana_regen": 12.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:firebolt",
+      "level": 2,
+      "weight": 4,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 20.0,
+      "safety_radius": 1.0,
+      "windup": 10,
+      "cooldown_multiplier": 0.75
+    },
+    {
+      "spell": "irons_spellbooks:magma_bomb",
+      "level": 1,
+      "weight": 2,
+      "role": "attack",
+      "min_range": 5.0,
+      "max_range": 22.0,
+      "safety_radius": 4.0,
+      "windup": 20,
+      "cooldown_multiplier": 1.5
+    }
+  ]
+}

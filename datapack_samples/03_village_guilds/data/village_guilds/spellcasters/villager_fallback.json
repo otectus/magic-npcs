@@ -1,0 +1,30 @@
+{
+  "_comment": "No profession field, so this is the fallback for every villager whose profession no other file in this pack claims. caster_chance is rolled once per villager and persisted, so only about a fifth of them are ever casters.",
+  "entity_type": "minecraft:villager",
+  "caster_chance": 0.2,
+  "max_mana": 70.0,
+  "mana_regen": 9.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:heal",
+      "level": 1,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 500,
+      "condition": {
+        "self_hp_below": 0.5
+      }
+    },
+    {
+      "spell": "irons_spellbooks:invisibility",
+      "level": 1,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 900,
+      "condition": {
+        "when_recently_hurt": true,
+        "recent_damage_window": 60
+      }
+    }
+  ]
+}

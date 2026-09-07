@@ -1,0 +1,31 @@
+{
+  "_comment": "replace:true wins the pool against other datapacks that also define minecraft:witch. If two packs both set replace for the same entity type, neither wins outright - they pool against each other by pool_weight, and /magicnpcs validate reports POOLED so you know to drop one of the flags.",
+  "entity_type": "minecraft:witch",
+  "replace": true,
+  "goal_priority": 1,
+  "max_mana": 150.0,
+  "mana_regen": 11.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:poison_splash",
+      "level": 2,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 4.0,
+      "max_range": 18.0,
+      "safety_radius": 3.0,
+      "windup": 18,
+      "cooldown": 150
+    },
+    {
+      "spell": "irons_spellbooks:greater_heal",
+      "level": 1,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 500,
+      "condition": {
+        "self_hp_below": 0.45
+      }
+    }
+  ]
+}

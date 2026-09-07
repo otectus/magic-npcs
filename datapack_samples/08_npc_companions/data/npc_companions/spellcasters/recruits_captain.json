@@ -1,0 +1,37 @@
+{
+  "_comment": "Replaces the captain loadout the mod ships. Recruits is a first-class integration and is one of the namespaces that is never gated by a [compat] namespace toggle - unlike the guardvillagers, easynpc, customnpcs, humancompanions, minecolonies, mca, morevillagers and villagersplus loadouts in this pack, this file is live as soon as the pack is. The Recruits adapter itself has its own [recruits] enabled switch, which is on by default.",
+  "entity_type": "recruits:captain",
+  "max_mana": 170.0,
+  "mana_regen": 12.0,
+  "native_attack": "suppress",
+  "spells": [
+    {
+      "spell": "irons_spellbooks:fireball",
+      "level": 2,
+      "weight": 2,
+      "role": "attack",
+      "min_range": 6.0,
+      "max_range": 24.0,
+      "safety_radius": 4.0,
+      "windup": 20,
+      "cooldown": 180
+    },
+    {
+      "spell": "irons_spellbooks:haste",
+      "level": 2,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 500
+    },
+    {
+      "spell": "irons_spellbooks:greater_heal",
+      "level": 2,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 400,
+      "condition": {
+        "self_hp_below": 0.5
+      }
+    }
+  ]
+}

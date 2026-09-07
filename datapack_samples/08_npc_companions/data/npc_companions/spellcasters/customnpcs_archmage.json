@@ -1,0 +1,59 @@
+{
+  "_comment": "all_of requires every listed trait, none_of excludes any NPC carrying one of them. Combined they carve out a narrow archetype: tower faction mages who are not merchants. This file pools with customnpcs_guard.json - an NPC matching both takes one of them, weighted by pool_weight.",
+  "entity_type": "customnpcs:customnpc",
+  "pool_weight": 2,
+  "conditions": {
+    "npc_traits": {
+      "all_of": [
+        "customnpcs:faction/tower",
+        "customnpcs:job/mage"
+      ],
+      "none_of": [
+        "customnpcs:job/trader",
+        "customnpcs:role/companion"
+      ]
+    }
+  },
+  "max_mana": 190.0,
+  "mana_regen": 13.0,
+  "native_attack": "suppress",
+  "spells": [
+    {
+      "spell": "irons_spellbooks:eldritch_blast",
+      "level": 3,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 3.0,
+      "max_range": 22.0,
+      "safety_radius": 1.5,
+      "windup": 15,
+      "cooldown": 90
+    },
+    {
+      "spell": "irons_spellbooks:black_hole",
+      "level": 1,
+      "weight": 1,
+      "role": "attack",
+      "min_range": 6.0,
+      "max_range": 20.0,
+      "safety_radius": 6.0,
+      "windup": 25,
+      "cooldown": 400,
+      "cast_chance": 0.5,
+      "condition": {
+        "enemies_within": 2,
+        "enemies_radius": 12.0
+      }
+    },
+    {
+      "spell": "irons_spellbooks:evasion",
+      "level": 2,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 600,
+      "condition": {
+        "self_hp_below": 0.5
+      }
+    }
+  ]
+}

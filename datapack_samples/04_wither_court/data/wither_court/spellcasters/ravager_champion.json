@@ -1,0 +1,37 @@
+{
+  "_comment": "A melee bruiser. native_attack suppress holds the ravager own attack goals inert and switches on Magic NPCs caster movement, so the champion paces itself into the band between its widest min_range and narrowest max_range.",
+  "entity_type": "minecraft:ravager",
+  "goal_priority": 2,
+  "native_attack": "suppress",
+  "max_mana": 180.0,
+  "mana_regen": 10.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:stomp",
+      "level": 2,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 5.0,
+      "safety_radius": 4.0,
+      "windup": 15,
+      "cooldown": 160
+    },
+    {
+      "spell": "irons_spellbooks:earthquake",
+      "level": 1,
+      "weight": 1,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 6.0,
+      "safety_radius": 6.0,
+      "windup": 25,
+      "cooldown": 400,
+      "cast_chance": 0.5,
+      "condition": {
+        "enemies_within": 2,
+        "enemies_radius": 10.0
+      }
+    }
+  ]
+}

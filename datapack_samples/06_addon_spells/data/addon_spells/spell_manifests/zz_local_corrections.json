@@ -1,0 +1,9 @@
+{
+  "_comment": "Manifests merge in resource-id order, so a later-sorting file overrides an earlier one for the same spell and logs that it did. That is how you correct an upstream manifest without editing someone elses pack.",
+  "format": 1,
+  "verified_against": "local retest of two rows from traveloptics.json",
+  "spells": {
+    "traveloptics:riptide_surge": "TARGET_AREA",
+    "esoteric_spell:experimental_bolt": "DIRECT"
+  }
+}

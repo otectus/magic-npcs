@@ -1,0 +1,14 @@
+{
+  "replace": false,
+  "values": [
+    "minecraft:blaze_rod",
+    {
+      "id": "minecraft:end_rod",
+      "required": false
+    },
+    {
+      "id": "irons_spellbooks:blank_rune",
+      "required": false
+    }
+  ]
+}

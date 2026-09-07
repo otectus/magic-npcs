@@ -1,0 +1,41 @@
+{
+  "_comment": "native_attack 'yield' means the evoker only casts Magic NPCs spells while none of its own attack goals (fangs, vexes, wololo) is running — its vanilla kit stays the headline act.",
+  "entity_type": "minecraft:evoker",
+  "max_mana": 140.0,
+  "mana_regen": 10.0,
+  "native_attack": "yield",
+  "spells": [
+    {
+      "spell": "irons_spellbooks:magic_arrow",
+      "level": 2,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 4.0,
+      "max_range": 22.0,
+      "safety_radius": 1.0,
+      "windup": 15,
+      "cooldown": 120
+    },
+    {
+      "spell": "irons_spellbooks:eldritch_blast",
+      "level": 1,
+      "weight": 2,
+      "role": "attack",
+      "min_range": 3.0,
+      "max_range": 20.0,
+      "safety_radius": 1.5,
+      "windup": 20,
+      "cooldown": 160
+    },
+    {
+      "spell": "irons_spellbooks:evasion",
+      "level": 1,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 500,
+      "condition": {
+        "self_hp_below": 0.6
+      }
+    }
+  ]
+}

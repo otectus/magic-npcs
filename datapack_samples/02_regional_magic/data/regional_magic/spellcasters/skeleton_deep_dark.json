@@ -1,0 +1,41 @@
+{
+  "_comment": "max_y gates this to the deepslate layers. min_y and max_y are absolute world Y, so sensible values differ per dimension.",
+  "entity_type": "minecraft:skeleton",
+  "pool_weight": 2,
+  "conditions": {
+    "dimensions": [
+      "minecraft:overworld"
+    ],
+    "max_y": 0,
+    "difficulties": [
+      "normal",
+      "hard"
+    ]
+  },
+  "max_mana": 140.0,
+  "mana_regen": 11.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:eldritch_blast",
+      "level": 2,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 2.0,
+      "max_range": 20.0,
+      "safety_radius": 1.5,
+      "windup": 18,
+      "cooldown": 120
+    },
+    {
+      "spell": "irons_spellbooks:sculk_tentacles",
+      "level": 1,
+      "weight": 1,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 12.0,
+      "safety_radius": 5.0,
+      "windup": 25,
+      "cooldown": 260
+    }
+  ]
+}

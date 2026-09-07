@@ -1,0 +1,30 @@
+{
+  "parent": "arcane_progression:root",
+  "display": {
+    "icon": {
+      "item": "magicnpcs:school_tome"
+    },
+    "title": "Keeper of the Tome",
+    "description": "Obtain a School Tome and anoint the village clerics",
+    "frame": "goal",
+    "show_toast": true,
+    "announce_to_chat": true
+  },
+  "criteria": {
+    "has_tome": {
+      "trigger": "minecraft:inventory_changed",
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "magicnpcs:school_tome"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "rewards": {
+    "function": "arcane_progression:anoint_holy"
+  }
+}

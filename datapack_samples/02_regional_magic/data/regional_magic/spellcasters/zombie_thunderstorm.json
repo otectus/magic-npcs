@@ -1,0 +1,34 @@
+{
+  "_comment": "require_storm matches only while the caster dimension is actually THUNDERING. Ordinary rain does not satisfy it, so this loadout is rarer than a plain rain check would be.",
+  "entity_type": "minecraft:zombie",
+  "conditions": {
+    "require_storm": true,
+    "time": "night"
+  },
+  "max_mana": 100.0,
+  "mana_regen": 10.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:lightning_lance",
+      "level": 2,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 4.0,
+      "max_range": 22.0,
+      "safety_radius": 1.5,
+      "windup": 15,
+      "cooldown": 140
+    },
+    {
+      "spell": "irons_spellbooks:ball_lightning",
+      "level": 1,
+      "weight": 1,
+      "role": "attack",
+      "min_range": 3.0,
+      "max_range": 18.0,
+      "safety_radius": 3.0,
+      "windup": 20,
+      "cooldown": 200
+    }
+  ]
+}

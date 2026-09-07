@@ -1,0 +1,14 @@
+{
+  "_comment": "Capabilities that mark a spell as something a mob cannot drive. Declaring these is not a wasted line: it turns a silent mana-burning no-op into an explicit, reported skip, and /magicnpcs validate then says so instead of guessing.",
+  "format": 1,
+  "verified_against": "esoteric_spell 0.4.1",
+  "spells": {
+    "esoteric_spell:mind_spike": "TARGET_ENTITY",
+    "esoteric_spell:arcane_lens": "ADDON_DEFAULT",
+    "esoteric_spell:scattered_thought": "MULTI_TARGET",
+    "esoteric_spell:ritual_of_binding": "SPECIAL_PREPARATION",
+    "esoteric_spell:scribe_grimoire": "PLAYER_ONLY",
+    "esoteric_spell:tidy_workshop": "UTILITY_NON_COMBAT",
+    "esoteric_spell:experimental_bolt": "UNVERIFIED"
+  }
+}

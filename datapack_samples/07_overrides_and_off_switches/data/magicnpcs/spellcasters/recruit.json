@@ -1,0 +1,26 @@
+{
+  "_comment": "A same-path full replacement of the shipped recruits:recruit loadout. No replace flag is needed to beat a mod jar - a datapack always outranks jar data for the same entity type. replace only arbitrates between two datapacks.",
+  "entity_type": "recruits:recruit",
+  "max_mana": 120.0,
+  "mana_regen": 10.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:guiding_bolt",
+      "level": 2,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 2.0,
+      "max_range": 20.0,
+      "safety_radius": 1.0,
+      "windup": 12,
+      "cooldown": 100
+    },
+    {
+      "spell": "irons_spellbooks:heal",
+      "level": 2,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 320
+    }
+  ]
+}

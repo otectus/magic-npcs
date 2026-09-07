@@ -1,0 +1,38 @@
+{
+  "entity_type": "minecraft:skeleton",
+  "pool_weight": 4,
+  "caster_chance": 0.15,
+  "max_mana": 130.0,
+  "mana_regen": 11.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:guiding_bolt",
+      "level": 2,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 3.0,
+      "max_range": 22.0,
+      "safety_radius": 1.0,
+      "windup": 12,
+      "cooldown": 100
+    },
+    {
+      "spell": "irons_spellbooks:ice_spikes",
+      "level": 2,
+      "weight": 2,
+      "role": "attack",
+      "min_range": 2.0,
+      "max_range": 16.0,
+      "safety_radius": 2.0,
+      "windup": 12,
+      "cooldown": 120
+    },
+    {
+      "spell": "irons_spellbooks:oakskin",
+      "level": 1,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 500
+    }
+  ]
+}

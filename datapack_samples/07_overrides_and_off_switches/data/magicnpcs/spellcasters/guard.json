@@ -1,0 +1,4 @@
+{
+  "_comment": "A bare disable stub. This file sits at exactly the data path of the loadout the mod ships (magicnpcs:spellcasters/guard.json), so ordinary datapack precedence shadows it and the entity_type is inherited from the file being shadowed - which is why entity_type may be omitted here. /magicnpcs validate records the inference so you can confirm it caught the right key.",
+  "enabled": false
+}

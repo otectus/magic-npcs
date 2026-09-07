@@ -1,0 +1,32 @@
+{
+  "_comment": "The minimum viable caster. 'entity_type' is the opt-in: Magic NPCs ships no vanilla loadouts, so skeletons cast nothing until a file like this exists. The file name is irrelevant.",
+  "entity_type": "minecraft:skeleton",
+  "max_mana": 100.0,
+  "mana_regen": 10.0,
+  "native_attack": "coexist",
+  "spells": [
+    {
+      "_comment": "magic_missile is INSTANT and target-aimed — the most forgiving spell for a mob.",
+      "spell": "irons_spellbooks:magic_missile",
+      "level": 1,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 20.0,
+      "safety_radius": 1.0,
+      "windup": 10,
+      "cooldown": 100
+    },
+    {
+      "spell": "irons_spellbooks:icicle",
+      "level": 1,
+      "weight": 2,
+      "role": "attack",
+      "min_range": 3.0,
+      "max_range": 18.0,
+      "safety_radius": 1.0,
+      "windup": 15,
+      "cooldown": 140
+    }
+  ]
+}

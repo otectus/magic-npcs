@@ -1,0 +1,20 @@
+{
+  "_comment": "Something to test the functions and rewards against. Spawn one, then run /magicnpcs loadout entity @e[type=minecraft:skeleton,limit=1,sort=nearest] to see which pack won.",
+  "entity_type": "minecraft:skeleton",
+  "caster_chance": 0.5,
+  "max_mana": 100.0,
+  "mana_regen": 10.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:magic_missile",
+      "level": 1,
+      "weight": 1,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 20.0,
+      "safety_radius": 1.0,
+      "windup": 10,
+      "cooldown": 100
+    }
+  ]
+}

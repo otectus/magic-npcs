@@ -1,0 +1,26 @@
+{
+  "_comment": "MineColonies citizens are driven by colony AI and a casting goal layered on top is unaware of work orders, so raiders are the safe target for a loadout.",
+  "entity_type": "minecolonies:barbarian",
+  "caster_chance": 0.3,
+  "max_mana": 90.0,
+  "mana_regen": 8.0,
+  "conditions": {
+    "difficulties": [
+      "normal",
+      "hard"
+    ]
+  },
+  "spells": [
+    {
+      "spell": "irons_spellbooks:firebolt",
+      "level": 1,
+      "weight": 2,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 18.0,
+      "safety_radius": 1.0,
+      "windup": 12,
+      "cooldown": 120
+    }
+  ]
+}

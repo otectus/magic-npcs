@@ -1,0 +1,6 @@
+{
+  "_comment": "The blunt off switch. A disabled loadout normally just removes itself; a disabled loadout that also sets replace suppresses every loadout for that entity type from every pack, including ones at other data paths. Use this to turn a mob off across a whole modpack. A disabled loadout may omit spells entirely.",
+  "entity_type": "minecraft:skeleton",
+  "enabled": false,
+  "replace": true
+}

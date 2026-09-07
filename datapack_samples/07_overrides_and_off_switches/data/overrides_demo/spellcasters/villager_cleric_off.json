@@ -1,0 +1,7 @@
+{
+  "_comment": "Suppression is scoped to the entity type plus profession key, so this switches off cleric loadouts only. Villagers of every other profession are untouched, and a profession-less minecraft:villager loadout still applies to them.",
+  "entity_type": "minecraft:villager",
+  "profession": "minecraft:cleric",
+  "enabled": false,
+  "replace": true
+}

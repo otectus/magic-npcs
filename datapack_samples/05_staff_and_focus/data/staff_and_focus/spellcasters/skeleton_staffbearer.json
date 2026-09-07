@@ -1,0 +1,54 @@
+{
+  "_comment": "Arms the mob on spawn, then requires it to still be holding a focus to cast. equipment is applied once per mob on the reconcile pass, not every tick, and is remembered so a reload does not re-roll the gear.",
+  "entity_type": "minecraft:skeleton",
+  "max_mana": 110.0,
+  "mana_regen": 10.0,
+  "equipment": {
+    "_comment": "Each hand takes a weighted list. An entry may be a bare item id (weight 1) or an object with item and weight. chance is the odds of equipping at all; only_if_empty leaves a hand alone when the mob already holds something.",
+    "mainhand": [
+      {
+        "item": "irons_spellbooks:pyrium_staff",
+        "weight": 5
+      },
+      {
+        "item": "irons_spellbooks:graybeard_staff",
+        "weight": 1
+      }
+    ],
+    "offhand": [
+      "minecraft:blaze_rod"
+    ],
+    "chance": 0.35,
+    "only_if_empty": true
+  },
+  "spells": [
+    {
+      "_comment": "require_held_item makes the spell conditional on required_items being in the hand named by required_hand. The list accepts item ids and #tags.",
+      "spell": "irons_spellbooks:magic_missile",
+      "level": 2,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 20.0,
+      "safety_radius": 1.0,
+      "windup": 10,
+      "cooldown": 100,
+      "require_held_item": true,
+      "required_items": [
+        "#magicnpcs:spell_focuses"
+      ],
+      "required_hand": "main"
+    },
+    {
+      "_comment": "No item gate, so an unarmed skeleton still has something to do.",
+      "spell": "irons_spellbooks:snowball",
+      "level": 1,
+      "weight": 1,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 14.0,
+      "safety_radius": 1.0,
+      "cooldown": 80
+    }
+  ]
+}

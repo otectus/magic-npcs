@@ -1,0 +1,31 @@
+{
+  "_comment": "Three tiers for one entity type. The order is: gather every loadout for minecraft:skeleton, drop the ones whose conditions do not match, pick ONE by pool_weight, then roll caster_chance to decide whether this individual is a caster at all. Both results are persisted on the mob, so neither is re-rolled on reload. Keeping caster_chance identical across the tiers means pool_weight alone controls rarity: 12 + 4 + 1, so the archmage is about 6 percent of casters.",
+  "entity_type": "minecraft:skeleton",
+  "pool_weight": 12,
+  "caster_chance": 0.15,
+  "max_mana": 80.0,
+  "mana_regen": 8.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:magic_missile",
+      "level": 1,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 16.0,
+      "safety_radius": 1.0,
+      "windup": 15,
+      "cooldown": 140
+    },
+    {
+      "spell": "irons_spellbooks:snowball",
+      "level": 1,
+      "weight": 1,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 14.0,
+      "safety_radius": 1.0,
+      "cooldown": 120
+    }
+  ]
+}

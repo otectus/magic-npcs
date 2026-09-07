@@ -1,0 +1,65 @@
+{
+  "_comment": "The rare tier, and the only one gated on difficulty - on easy this file is filtered out before the pool_weight pick, so the pool is just the other two.",
+  "entity_type": "minecraft:skeleton",
+  "pool_weight": 1,
+  "caster_chance": 0.15,
+  "goal_priority": 1,
+  "native_attack": "suppress",
+  "conditions": {
+    "difficulties": [
+      "normal",
+      "hard"
+    ]
+  },
+  "max_mana": 200.0,
+  "mana_regen": 14.0,
+  "equipment": {
+    "mainhand": [
+      {
+        "item": "irons_spellbooks:pyrium_staff",
+        "weight": 1
+      }
+    ],
+    "chance": 1.0,
+    "only_if_empty": false
+  },
+  "spells": [
+    {
+      "spell": "irons_spellbooks:eldritch_blast",
+      "level": 3,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 3.0,
+      "max_range": 22.0,
+      "safety_radius": 1.5,
+      "windup": 12,
+      "cooldown": 80
+    },
+    {
+      "spell": "irons_spellbooks:blizzard",
+      "level": 2,
+      "weight": 1,
+      "role": "attack",
+      "min_range": 6.0,
+      "max_range": 20.0,
+      "safety_radius": 6.0,
+      "windup": 25,
+      "cooldown": 400,
+      "cast_chance": 0.5,
+      "condition": {
+        "enemies_within": 2,
+        "enemies_radius": 12.0
+      }
+    },
+    {
+      "spell": "irons_spellbooks:greater_heal",
+      "level": 2,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 500,
+      "condition": {
+        "self_hp_below": 0.4
+      }
+    }
+  ]
+}

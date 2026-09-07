@@ -1,0 +1,49 @@
+{
+  "_comment": "moon_phases takes the vanilla phase numbers 0-7, where 0 is the full moon. replace:true makes this loadout beat any other pack that also defines minecraft:witch, instead of pooling with it.",
+  "entity_type": "minecraft:witch",
+  "replace": true,
+  "conditions": {
+    "time": "night",
+    "moon_phases": [
+      0,
+      1,
+      7
+    ]
+  },
+  "max_mana": 160.0,
+  "mana_regen": 12.0,
+  "spells": [
+    {
+      "spell": "irons_spellbooks:blood_needles",
+      "level": 2,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 2.0,
+      "max_range": 18.0,
+      "safety_radius": 1.0,
+      "windup": 15,
+      "cooldown": 120
+    },
+    {
+      "spell": "irons_spellbooks:wither_skull",
+      "level": 1,
+      "weight": 2,
+      "role": "attack",
+      "min_range": 4.0,
+      "max_range": 22.0,
+      "safety_radius": 2.0,
+      "windup": 20,
+      "cooldown": 180
+    },
+    {
+      "spell": "irons_spellbooks:greater_heal",
+      "level": 1,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 600,
+      "condition": {
+        "self_hp_below": 0.5
+      }
+    }
+  ]
+}

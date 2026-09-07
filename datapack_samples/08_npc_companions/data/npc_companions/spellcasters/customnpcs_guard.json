@@ -1,0 +1,33 @@
+{
+  "_comment": "CustomNPCs registers a single entity type for every NPC, so npc_traits is what tells them apart. Trait ids come from the NPC own mod and are free-form - Magic NPCs does not validate them against a registry. any_of matches when the NPC has at least one of the listed traits.",
+  "entity_type": "customnpcs:customnpc",
+  "max_mana": 110.0,
+  "mana_regen": 9.0,
+  "conditions": {
+    "npc_traits": {
+      "any_of": [
+        "customnpcs:job/guard",
+        "customnpcs:role/guard"
+      ]
+    }
+  },
+  "spells": [
+    {
+      "spell": "irons_spellbooks:magic_missile",
+      "level": 1,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 18.0,
+      "safety_radius": 1.0,
+      "cooldown": 100
+    },
+    {
+      "spell": "irons_spellbooks:heal",
+      "level": 1,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 400
+    }
+  ]
+}

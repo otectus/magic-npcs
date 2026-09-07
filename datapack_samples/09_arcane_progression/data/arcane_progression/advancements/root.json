@@ -1,0 +1,18 @@
+{
+  "display": {
+    "icon": {
+      "item": "magicnpcs:school_tome"
+    },
+    "title": "The Arcane Order",
+    "description": "Teach the village to fight back",
+    "background": "minecraft:textures/block/deepslate_bricks.png",
+    "frame": "task",
+    "show_toast": false,
+    "announce_to_chat": false
+  },
+  "criteria": {
+    "tick": {
+      "trigger": "minecraft:tick"
+    }
+  }
+}

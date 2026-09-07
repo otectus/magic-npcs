@@ -1,0 +1,67 @@
+{
+  "_comment": "A phased boss. Every spell carries its own condition block, so the lord opens with projectiles, adds an AoE once it is surrounded, and only reaches for the heavy finisher when the target is already wounded.",
+  "entity_type": "minecraft:wither_skeleton",
+  "goal_priority": 0,
+  "native_attack": "suppress",
+  "max_mana": 240.0,
+  "mana_regen": 14.0,
+  "spells": [
+    {
+      "_comment": "The bread-and-butter opener. No condition, so it is always eligible.",
+      "spell": "irons_spellbooks:wither_skull",
+      "level": 3,
+      "weight": 4,
+      "role": "attack",
+      "min_range": 3.0,
+      "max_range": 24.0,
+      "safety_radius": 2.0,
+      "windup": 12,
+      "cooldown": 60
+    },
+    {
+      "_comment": "Crowd control. enemies_within counts hostile entities inside enemies_radius, which is only meaningful alongside enemies_within.",
+      "spell": "irons_spellbooks:blood_slash",
+      "level": 2,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 8.0,
+      "safety_radius": 4.0,
+      "windup": 15,
+      "cooldown": 140,
+      "condition": {
+        "enemies_within": 2,
+        "enemies_radius": 8.0
+      }
+    },
+    {
+      "_comment": "The finisher, held back until the target is nearly dead. cast_chance adds hesitation so it is not automatic.",
+      "spell": "irons_spellbooks:heartstop",
+      "level": 2,
+      "weight": 2,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 6.0,
+      "safety_radius": 2.0,
+      "windup": 20,
+      "cooldown": 300,
+      "cast_chance": 0.6,
+      "condition": {
+        "target_hp_below": 0.35
+      }
+    },
+    {
+      "_comment": "Panic button. when_recently_hurt looks back recent_damage_window ticks, which is clamped to a maximum of 100.",
+      "spell": "irons_spellbooks:ice_block",
+      "level": 1,
+      "weight": 1,
+      "role": "support",
+      "cooldown": 900,
+      "condition": {
+        "self_hp_below": 0.25,
+        "when_recently_hurt": true,
+        "recent_damage_window": 40
+      }
+    }
+  ]
+}

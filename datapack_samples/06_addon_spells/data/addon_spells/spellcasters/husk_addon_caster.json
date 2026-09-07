@@ -1,0 +1,41 @@
+{
+  "_comment": "A loadout that uses the spells declared by the manifests in this pack. Manifests are reloaded before loadouts on /reload, so validation sees the new declarations immediately. If the add-on is not installed, these spell entries are dropped with an INFO line and the rest of the file still loads.",
+  "entity_type": "minecraft:husk",
+  "max_mana": 120.0,
+  "mana_regen": 10.0,
+  "spells": [
+    {
+      "spell": "traveloptics:tidal_lance",
+      "level": 1,
+      "weight": 3,
+      "role": "attack",
+      "min_range": 2.0,
+      "max_range": 18.0,
+      "safety_radius": 1.5,
+      "windup": 12,
+      "cooldown": 120
+    },
+    {
+      "spell": "esoteric_spell:mind_spike",
+      "level": 1,
+      "weight": 2,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 16.0,
+      "safety_radius": 1.0,
+      "windup": 10,
+      "cooldown": 140
+    },
+    {
+      "_comment": "A known-good vanilla-side spell as a fallback, so the mob is not left with nothing if the add-on is missing.",
+      "spell": "irons_spellbooks:magic_missile",
+      "level": 1,
+      "weight": 2,
+      "role": "attack",
+      "min_range": 0.0,
+      "max_range": 20.0,
+      "safety_radius": 1.0,
+      "cooldown": 100
+    }
+  ]
+}
