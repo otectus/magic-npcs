@@ -300,6 +300,13 @@ public class IronsSpellcasterHandler {
         if (!MagicNpcsConfig.SCHOOLS_ENABLED.get()) {
             return SchoolAssignResult.SCHOOLS_DISABLED;
         }
+        // Before SchoolData.set writes anything. An NPC whose framework this mod declines to manage
+        // must not acquire a saved school it will never be able to act on — and the write itself is
+        // what 0.9.0 let through, ahead of a reconcile that would have refused (roadmap MN-002).
+        SchoolAssignResult framework = frameworkRefusal(mob);
+        if (framework != null) {
+            return framework;
+        }
         SchoolType school = SchoolRegistry.getSchool(schoolId);
         if (school == null) {
             return SchoolAssignResult.UNKNOWN_SCHOOL;
@@ -328,8 +335,35 @@ public class IronsSpellcasterHandler {
         clearSchool(mob, MagicNpcSchoolChangedEvent.ChangeSource.COMMAND);
     }
 
-    /** As {@link #clearSchool(Mob)}, naming what asked for it. */
+    /**
+     * @return the refusal to report for {@code mob}'s NPC framework, or {@code null} when it may be
+     *         managed. Shared by every mutation route so the command, the Tome and a script cannot
+     *         disagree about which NPCs this mod is allowed to write to.
+     */
+    public static SchoolAssignResult frameworkRefusal(Mob mob) {
+        com.otectus.magicnpcs.core.caster.FrameworkEligibility.Verdict verdict =
+                com.otectus.magicnpcs.core.caster.FrameworkEligibility.check(mob);
+        if (verdict.allowed()) {
+            return null;
+        }
+        return switch (verdict.decision()) {
+            case UNSUPPORTED_FRAMEWORK -> SchoolAssignResult.UNSUPPORTED_NPC_FRAMEWORK;
+            case FRAMEWORK_DISABLED -> SchoolAssignResult.NPC_FRAMEWORK_DISABLED;
+            default -> SchoolAssignResult.NPC_FRAMEWORK_UNAVAILABLE;
+        };
+    }
+
+    /**
+     * As {@link #clearSchool(Mob)}, naming what asked for it.
+     *
+     * <p>Gated like the assignment route, and for the same reason: "clear" is a write too. Its refusal
+     * is silent here because the method has no result type; the command and Tome consumers report the
+     * framework refusal from {@link #frameworkRefusal} before calling it.
+     */
     public static void clearSchool(Mob mob, MagicNpcSchoolChangedEvent.ChangeSource source) {
+        if (frameworkRefusal(mob) != null) {
+            return;
+        }
         SchoolData.markNonCaster(mob, true, source);
         mob.addTag(MANUAL_SCHOOL_TAG);
         CasterReconciler.removeSelfDefense(mob);
@@ -347,8 +381,17 @@ public class IronsSpellcasterHandler {
         resetSchoolToAuto(mob, MagicNpcSchoolChangedEvent.ChangeSource.COMMAND);
     }
 
-    /** As {@link #resetSchoolToAuto(Mob)}, naming what asked for it. */
+    /**
+     * As {@link #resetSchoolToAuto(Mob)}, naming what asked for it.
+     *
+     * <p>Gated like the other two mutation routes. Returning an unmanageable NPC to automatic would
+     * discard the author's saved assignment in exchange for an assignment this mod has already
+     * refused to make, which is a worse outcome than leaving the saved choice alone.
+     */
     public static void resetSchoolToAuto(Mob mob, MagicNpcSchoolChangedEvent.ChangeSource source) {
+        if (frameworkRefusal(mob) != null) {
+            return;
+        }
         SchoolData.returnToAuto(mob, source);
         mob.removeTag(MANUAL_SCHOOL_TAG);
         CasterReconciler.reconcile(mob, ReconcileReason.MANUAL_SCHOOL);

@@ -73,6 +73,14 @@ public final class EasyNpcCastAction implements CustomActionExecutor {
         int level = parseLevel(arguments, mob);
         Aim aim = parseAim(arguments);
         LivingEntity target = aim == Aim.SELF ? null : resolveTarget(mob, serverPlayer);
+        if (aim == Aim.TARGET && target == null) {
+            // An action that asked for a cast AT something, with nothing to cast at, is refused and
+            // said so. Passing null on would have quietly turned an offensive action into a self-cast
+            // — a different spell against a different recipient than the author wrote (MN-003).
+            warn("cast of " + spellId + " refused: this action is aimed at a target and the NPC has "
+                    + "no valid one (write 'self' to make it a self-cast)", mob);
+            return;
+        }
 
         DetachedCastDriver.Result result = DetachedCastDriver.cast(mob, target, spellId, level);
         if (!result.started()) {
@@ -122,6 +130,9 @@ public final class EasyNpcCastAction implements CustomActionExecutor {
             return 1; // the caller wrote 'magicnpcs:cast <spell> self' and skipped the level
         }
         try {
+            // Only the obviously malformed is rejected here. The real bound is the spell's own
+            // declared min/max, applied by CastRequest before Iron's reads the level for mana, cast
+            // time or effect magnitude — a per-spell fact this parser has no business guessing at.
             return Math.max(1, Integer.parseInt(raw));
         } catch (NumberFormatException ex) {
             warn("'" + raw + "' is not a spell level; using 1", mob);

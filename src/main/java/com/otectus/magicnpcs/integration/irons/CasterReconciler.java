@@ -7,6 +7,7 @@ import com.otectus.magicnpcs.core.SchoolData;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
 import com.otectus.magicnpcs.core.caster.CasterGoalListeners;
 import com.otectus.magicnpcs.core.caster.CasterMovementGoal;
+import com.otectus.magicnpcs.core.caster.FrameworkEligibility;
 import com.otectus.magicnpcs.core.caster.ManagedCasterState;
 import com.otectus.magicnpcs.core.caster.ReconcileReason;
 import com.otectus.magicnpcs.core.caster.ReconcileResult;
@@ -136,6 +137,20 @@ public final class CasterReconciler {
         if (!MagicNpcsConfig.ENABLE_SPELLCASTING.get()) {
             return Desired.none(ReconcileResult.ReasonCode.MASTER_SWITCH_OFF);
         }
+        // The framework gate comes before everything, and before any write. Below this point the
+        // method reads a manual assignment, rolls caster_chance and resolves a loadout, and install()
+        // then rewrites the mob's attributes, equipment and goals. Through 0.9.0 a CustomNPC on an
+        // unsupported build reached all of that: its adapter declined to apply, adapter resolution
+        // fell back to the generic default, and the mod managed an NPC whose host it had explicitly
+        // refused to speak for (roadmap MN-002).
+        FrameworkEligibility.Verdict framework = FrameworkEligibility.check(mob);
+        if (!framework.allowed()) {
+            return Desired.none(switch (framework.decision()) {
+                case UNSUPPORTED_FRAMEWORK -> ReconcileResult.ReasonCode.UNSUPPORTED_NPC_FRAMEWORK;
+                case FRAMEWORK_DISABLED -> ReconcileResult.ReasonCode.NPC_FRAMEWORK_DISABLED;
+                default -> ReconcileResult.ReasonCode.NPC_FRAMEWORK_UNAVAILABLE;
+            }, framework.detail());
+        }
         // A player's own choice outranks everything, including a datapack loadout. Goals are not
         // persisted, so without this an explicit loadout re-resolved on the next chunk load silently
         // overwrote a Tome/command assignment. Only consulted for mobs that may carry our data, so the
@@ -231,9 +246,15 @@ public final class CasterReconciler {
         } else {
             IronsBridge.clampMana(mob, maxMana.getValue()); // a lower ceiling must still bind
         }
-        // Keep cooldowns for spells the new loadout still has; drop the rest.
+        // Keep cooldowns for spells the new loadout still has; drop the rest. Both halves are
+        // canonical: an entry written as `devour` and a stored cooldown keyed by
+        // `irons_spellbooks:devour` are the same spell, and comparing the raw forms dropped the
+        // cooldown as though the author had removed the spell (roadmap MN-005). Existing keys are
+        // normalised first — a caster whose cooldowns predate this release may hold either form, and
+        // equivalent keys merge onto the longest remaining deadline rather than the last one written.
+        state.normalizeCooldownKeys(IronsBridge::canonicalId);
         Set<ResourceLocation> present = new HashSet<>();
-        loadout.spells().forEach(e -> present.add(e.spell()));
+        loadout.spells().forEach(e -> present.add(IronsBridge.canonicalId(e.spell())));
         state.retainCooldownsFor(present);
 
         applyEquipment(mob, loadout, state);

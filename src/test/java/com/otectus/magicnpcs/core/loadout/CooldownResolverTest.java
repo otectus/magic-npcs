@@ -61,4 +61,77 @@ class CooldownResolverTest {
         int cd = CooldownResolver.resolve(null, 0.0, GLOBAL, 1200, FLOOR);
         assertEquals(FLOOR, cd, "a 0 multiplier still cannot go below the floor");
     }
+
+    // --- REG-23: a positive cooldown value must never make a spell faster (roadmap MN-017) --------
+
+    /**
+     * The roadmap's exact witness. 30,000,000 ticks at ×100 is 3×10^9, which does not fit in an int;
+     * through 0.9.0 the narrowing cast happened before the floor, so the product wrapped negative and
+     * {@code Math.max} handed back {@code minCooldownTicks}. An author asking for "effectively never"
+     * got the fastest cooldown the server allowed.
+     */
+    @Test
+    void theRoadmapWitnessSaturatesInsteadOfWrappingToTheFloor() {
+        int cd = CooldownResolver.resolve(null, 100.0, GLOBAL, 30_000_000, FLOOR);
+        assertTrue(cd > FLOOR,
+                "a huge positive cooldown must not resolve to the minimum; got " + cd);
+        assertEquals(Integer.MAX_VALUE, cd,
+                "an unrepresentable cooldown saturates rather than wrapping");
+    }
+
+    /** The boundary either side of {@link Integer#MAX_VALUE}, so saturation starts where it should. */
+    @Test
+    void integerBoundariesAreHandledExactly() {
+        assertEquals(Integer.MAX_VALUE - 1,
+                CooldownResolver.resolve(null, 1.0, GLOBAL, Integer.MAX_VALUE - 1, FLOOR));
+        assertEquals(Integer.MAX_VALUE,
+                CooldownResolver.resolve(null, 1.0, GLOBAL, Integer.MAX_VALUE, FLOOR));
+        assertEquals(Integer.MAX_VALUE,
+                CooldownResolver.resolve(null, 2.0, GLOBAL, Integer.MAX_VALUE, FLOOR));
+    }
+
+    /** An explicit tick count at the top of the range is used verbatim, not wrapped. */
+    @Test
+    void anExplicitMaximumCooldownIsUsedVerbatim() {
+        assertEquals(Integer.MAX_VALUE,
+                CooldownResolver.resolve(Integer.MAX_VALUE, null, GLOBAL, 200, FLOOR));
+    }
+
+    /**
+     * NaN and infinity are refused rather than silently producing a number. NaN is the dangerous one:
+     * it survives {@code Math.max(0.0, x)}, so the old clamp let it straight through into the
+     * arithmetic.
+     */
+    @Test
+    void nonFiniteMultipliersResolveToTheFloorRatherThanGarbage() {
+        assertEquals(FLOOR, CooldownResolver.resolve(null, Double.NaN, GLOBAL, 1200, FLOOR));
+        assertEquals(FLOOR, CooldownResolver.resolve(null, Double.POSITIVE_INFINITY, GLOBAL, 1200, FLOOR));
+        assertEquals(FLOOR, CooldownResolver.resolve(null, Double.NEGATIVE_INFINITY, GLOBAL, 1200, FLOOR));
+        assertEquals(FLOOR, CooldownResolver.resolve(null, null, Double.NaN, 1200, FLOOR));
+    }
+
+    /** A negative multiplier cannot produce a negative cooldown, which would read as "ready now". */
+    @Test
+    void aNegativeMultiplierCannotProduceANegativeCooldown() {
+        assertEquals(FLOOR, CooldownResolver.resolve(null, -1.0, GLOBAL, 1200, FLOOR));
+    }
+
+    /** A negative configured floor does not become a negative cooldown either. */
+    @Test
+    void aNegativeFloorIsTreatedAsZero() {
+        assertEquals(200, CooldownResolver.resolve(null, 1.0, GLOBAL, 200, -100));
+        assertEquals(0, CooldownResolver.resolve(0, null, GLOBAL, 200, -100));
+    }
+
+    /**
+     * Positive control: every ordinary value in the shipped loadouts resolves exactly as it did
+     * before this change. The overflow fix must be invisible in the normal range.
+     */
+    @Test
+    void ordinaryRangesAreUnchanged() {
+        assertEquals(1200, CooldownResolver.resolve(null, 1.0, GLOBAL, 1200, FLOOR));
+        assertEquals(600, CooldownResolver.resolve(null, 0.5, GLOBAL, 1200, FLOOR));
+        assertEquals(2400, CooldownResolver.resolve(null, 2.0, GLOBAL, 1200, FLOOR));
+        assertEquals(100, CooldownResolver.resolve(100, null, GLOBAL, 1200, FLOOR));
+    }
 }

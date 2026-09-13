@@ -24,7 +24,17 @@ public enum SchoolAssignResult {
      * or Iron's own per-spell enable flags. Run {@code /magicnpcs school pool <school>} for the
      * per-filter breakdown.
      */
-    NO_CASTABLE_SPELLS;
+    NO_CASTABLE_SPELLS,
+    /**
+     * The NPC belongs to a framework at a build this mod is not pinned to. Deliberately left
+     * unmanaged: the bridge declines to speak for an unrecognised build, and through 0.9.0 a manual
+     * assignment wrote a school onto it anyway, which is the bypass MN-002 records.
+     */
+    UNSUPPORTED_NPC_FRAMEWORK,
+    /** The NPC's framework is installed but its bridge is not running, so it cannot be managed. */
+    NPC_FRAMEWORK_UNAVAILABLE,
+    /** The integration for this NPC's framework is switched off in the config. */
+    NPC_FRAMEWORK_DISABLED;
 
     public boolean ok() {
         return this == OK;
@@ -39,6 +49,12 @@ public enum SchoolAssignResult {
             case SCHOOL_NOT_ALLOWED -> school + ": not listed in schools.allowedSchools";
             case NO_CASTABLE_SPELLS -> school + ": no castable spells under the current filters "
                     + "(see /magicnpcs school pool " + school + ")";
+            case UNSUPPORTED_NPC_FRAMEWORK -> "this NPC's own mod is at a build Magic NPCs is not "
+                    + "pinned to, so it is left unmanaged — nothing was written to it";
+            case NPC_FRAMEWORK_UNAVAILABLE -> "this NPC's own mod is installed but its Magic NPCs "
+                    + "bridge is not running — nothing was written to it";
+            case NPC_FRAMEWORK_DISABLED -> "the integration for this NPC's own mod is switched off — "
+                    + "nothing was written to it";
         };
     }
 }

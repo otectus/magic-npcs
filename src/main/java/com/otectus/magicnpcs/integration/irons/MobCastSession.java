@@ -72,6 +72,10 @@ public final class MobCastSession {
     private State state = State.CHANNELLING;
     private int lastTickedAt = Integer.MIN_VALUE;
     private boolean effectCommitted;
+    /** True once an effect hook has been ENTERED, whether or not it returned. See {@link #enterEffect}. */
+    private boolean effectEntered;
+    /** Cleanup is at most once: a session ended by both its owner and itself must not run it twice. */
+    private boolean cleanedUp;
 
     /** Where a session ended up. Only {@link #COMPLETE} means the spell's effect actually landed. */
     public enum State { CHANNELLING, COMPLETE, CANCELLED }
@@ -193,15 +197,26 @@ public final class MobCastSession {
         MagicData data = prepared.data();
 
         MobCastSession session = new MobCastSession(caster, target, spell, level, data,
-                prepared.ownsCastData() || data.getAdditionalCastData() != null, eventSource);
+                prepared.ownsCastData(), eventSource);
         // Publish "this mob is mid-cast" where the vanilla-side movement goal can see it without
         // importing Iron's. A caster that strafes through its own channel throws away the aim it
         // takes every tick.
         com.otectus.magicnpcs.core.caster.ManagedCasterState.of(caster).setChannelling(true);
         int castTime = Math.max(0, resolvedCastTime);
-        data.initiateCast(spell, level, castTime, CastSource.MOB, SLOT);
-        spell.onServerPreCast(caster.level(), level, caster, data);
-        // The transaction point: Iron's has accepted the cast and owns the state from here.
+        try {
+            data.initiateCast(spell, level, castTime, CastSource.MOB, SLOT);
+            spell.onServerPreCast(caster.level(), level, caster, data);
+        } catch (RuntimeException | LinkageError failure) {
+            // Iron's accepted nothing, so nothing is owed. What it may have left behind is a caster
+            // Iron's still believes is casting, which would block every later cast on this mob for
+            // as long as it lived (roadmap MN-004). Undo exactly that and refuse.
+            session.releaseWithoutCharging();
+            diagnose(caster, spell, "pre-cast", failure);
+            return refuse(RefusalReason.PRE_CAST_REFUSED, spell, caster, failure.toString());
+        }
+        // The transaction point, in one place: Iron's has accepted the cast, and this is where — and
+        // the only place where — the caster pays for it. A caller cannot announce acceptance before
+        // the charge, because the charge is part of acceptance.
         data.addMana(-spell.getManaCost(level));
         if (MagicNpcsConfig.debugLogging()) {
             MagicNpcs.LOGGER.info("[cast] {} began {} (lvl {}, {} for {}t): mana now {}",
@@ -209,6 +224,40 @@ public final class MobCastSession {
                     session.castType, castTime, data.getMana());
         }
         return new Start(session, null, null);
+    }
+
+    /**
+     * One diagnostic line for a spell that threw, classified by spell, stage and the Iron's build.
+     *
+     * <p>One line rather than a stack trace per tick, and scoped to the spell rather than the mod: a
+     * single misbehaving spell must not read as "Magic NPCs is broken", and every other NPC must keep
+     * advancing (MN-004).
+     */
+    private static void diagnose(Mob caster, AbstractSpell spell, String stage, Throwable failure) {
+        MagicNpcs.LOGGER.error("[cast] {} threw during {} for {} (Iron's {}). This cast is abandoned; "
+                        + "other casters are unaffected.",
+                spell.getSpellResource(), stage, EntityType.getKey(caster.getType()),
+                MagicNpcs.IRONS_VERIFIED_RANGE, failure);
+    }
+
+    /**
+     * Undo a preparation that never became an accepted cast.
+     *
+     * <p>Distinct from {@link #finish}: nothing was charged and Iron's completion hook is not owed a
+     * call, because as far as the spell is concerned the cast never began.
+     */
+    private void releaseWithoutCharging() {
+        state = State.CANCELLED;
+        cleanedUp = true;
+        try {
+            data.resetCastingState();
+            if (ownsCastData) {
+                data.resetAdditionalCastData();
+            }
+        } catch (RuntimeException | LinkageError ignored) {
+            // Already on the failure path; a second failure here must not replace the first.
+        }
+        com.otectus.magicnpcs.core.caster.ManagedCasterState.of(caster).setChannelling(false);
     }
 
     /**
@@ -250,6 +299,9 @@ public final class MobCastSession {
             CasterFacing.snap(caster, target);
         }
 
+        // Ownership is recorded from what THIS call installed, never from "there happened to be cast
+        // data on the caster". Treating a pre-existing instance as ours meant a session could reset
+        // another system's cast data on its way out (roadmap MN-004).
         boolean ownsCastData = installCastData(data, spell, target, needsTarget);
         // Every spell gets its own pre-cast step, not just the target-locked ones. Many Iron's spells
         // BUILD their cast data here rather than in onCast: HasteSpell's checkPreCastConditions
@@ -257,8 +309,17 @@ public final class MobCastSession {
         // the cast data its onCast then requires. Skipping this for non-target spells left roughly
         // twenty of them — haste, blessing_of_life, healing_circle, sunbeam, chain_lightning, slow,
         // wololo, arrow_volley, blight, earthquake and more — doing nothing at all.
-        if (!spell.checkPreCastConditions(caster.level(), level, caster, data)) {
-            if (ownsCastData || data.getAdditionalCastData() != null) {
+        boolean passed;
+        try {
+            passed = spell.checkPreCastConditions(caster.level(), level, caster, data);
+        } catch (RuntimeException | LinkageError failure) {
+            // A spell whose own pre-cast check throws is refused, not crashed through. Nothing has
+            // been charged at this point, so the caster is exactly as it was.
+            diagnose(caster, spell, "checkPreCastConditions", failure);
+            passed = false;
+        }
+        if (!passed) {
+            if (ownsCastData) {
                 data.resetAdditionalCastData();
             }
             return new Prepared(data, ownsCastData, false, RefusalReason.PRE_CAST_REFUSED);
@@ -322,9 +383,15 @@ public final class MobCastSession {
             return true;
         }
         lastTickedAt = caster.tickCount;
-        data.handleCastDuration();
-        if (data.isCasting()) {
-            spell.onServerCastTick(caster.level(), level, caster, data);
+        try {
+            data.handleCastDuration();
+            if (data.isCasting()) {
+                spell.onServerCastTick(caster.level(), level, caster, data);
+            }
+        } catch (RuntimeException | LinkageError failure) {
+            diagnose(caster, spell, "onServerCastTick", failure);
+            terminate(State.CANCELLED, CancelReason.SPELL_ASKED_TO_STOP);
+            return false;
         }
         if (target != null && target.isAlive()) {
             // Iron's own casting mob calls forceLookAtTarget here every tick; a channelled spell that
@@ -334,20 +401,69 @@ public final class MobCastSession {
         }
         if (data.getCastDurationRemaining() <= 0) {
             if (castType == CastType.LONG || castType == CastType.INSTANT) {
-                spell.onCast(caster.level(), level, caster, CastSource.MOB, data);
-                effectCommitted = true;
+                if (!enterEffect()) {
+                    return false;
+                }
             }
-            finish(false);
-            state = State.COMPLETE;
-            MagicNpcEvents.postCompleted(caster, spell.getSpellResource(), level, target, eventSource);
+            terminate(State.COMPLETE, null);
             return false;
         }
         if (castType == CastType.CONTINUOUS
                 && (data.getCastDurationRemaining() + 1) % CONTINUOUS_CADENCE == 0) {
-            spell.onCast(caster.level(), level, caster, CastSource.MOB, data);
-            effectCommitted = true;
+            if (!enterEffect()) {
+                return false;
+            }
         }
         return true;
+    }
+
+    /**
+     * Call the spell's effect hook, recording that it was entered <b>before</b> calling it.
+     *
+     * <p>The order is the whole point. A spell can spawn its projectile, apply its effect or start its
+     * area entity and then throw; if entry were recorded afterwards, the mod would believe nothing had
+     * happened and would be free to refund and let the caster try again — paying once for two effects.
+     * The roadmap states the rule directly: after entering an effect hook, do not automatically refund
+     * and retry (MN-004).
+     *
+     * @return true when the effect returned normally and the session may continue
+     */
+    private boolean enterEffect() {
+        effectEntered = true;
+        try {
+            spell.onCast(caster.level(), level, caster, CastSource.MOB, data);
+            effectCommitted = true;
+            return true;
+        } catch (RuntimeException | LinkageError failure) {
+            diagnose(caster, spell, "onCast", failure);
+            // Terminal, and deliberately not refunded: an effect may already have landed.
+            terminate(State.CANCELLED, CancelReason.SPELL_ASKED_TO_STOP);
+            return false;
+        }
+    }
+
+    /**
+     * The one terminal path: take ownership of the ending, run cleanup, then announce it.
+     *
+     * <p>Ownership before announcement, because the announcement is externally re-entrant. A listener
+     * answering a completion by starting a replacement cast on the same caster used to do so while
+     * this session was still, by its own state, channelling — so the replacement's terminal could be
+     * consumed by the old cast's bookkeeping (MN-004, MN-013).
+     *
+     * @param reason the cancellation reason, or {@code null} for a completion
+     */
+    private void terminate(State terminal, CancelReason reason) {
+        if (state != State.CHANNELLING) {
+            return; // at most once, however many owners think they ended this cast
+        }
+        state = terminal;
+        finish(terminal == State.CANCELLED);
+        if (terminal == State.COMPLETE) {
+            MagicNpcEvents.postCompleted(caster, spell.getSpellResource(), level, target, eventSource);
+        } else {
+            MagicNpcEvents.postCancelled(caster, spell.getSpellResource(), level, target, eventSource,
+                    reason == null ? CancelReason.GOAL_STOPPED.description() : reason.description());
+        }
     }
 
     /**
@@ -363,31 +479,60 @@ public final class MobCastSession {
             MagicNpcs.LOGGER.info("[cast] {} cancelled {}: {}", EntityType.getKey(caster.getType()),
                     spell.getSpellName(), reason.description());
         }
-        finish(true);
-        state = State.CANCELLED;
         // The terminal guard in MagicNpcEvents backs this up: a session cancelled by both its goal and
         // itself must still announce exactly one ending.
-        MagicNpcEvents.postCancelled(caster, spell.getSpellResource(), level, target, eventSource,
-                reason.description());
+        terminate(State.CANCELLED, reason);
     }
 
+    /**
+     * Release everything this session owns, at most once.
+     *
+     * <p>Every step is independently guarded. A completion hook that throws must not stop the channel
+     * state being reset, and a reset that throws must not stop the movement hold being released: a
+     * caster frozen in place by an interrupted channel would simply never move again, and one Iron's
+     * still believes is casting would never cast again.
+     */
     private void finish(boolean cancelled) {
+        if (cleanedUp) {
+            return;
+        }
+        cleanedUp = true;
         try {
             spell.onServerCastComplete(caster.level(), level, caster, data, cancelled);
+        } catch (RuntimeException | LinkageError failure) {
+            diagnose(caster, spell, "onServerCastComplete", failure);
         } finally {
-            data.resetCastingState();
-            if (ownsCastData) {
-                data.resetAdditionalCastData(); // never leak this cast's target into the next one
+            try {
+                data.resetCastingState();
+                if (ownsCastData) {
+                    data.resetAdditionalCastData(); // never leak this cast's target into the next one
+                }
+            } catch (RuntimeException | LinkageError failure) {
+                diagnose(caster, spell, "resetCastingState", failure);
             }
-            // Every exit path releases the movement hold, including the cancel path — a caster
-            // frozen in place by a channel that was interrupted would simply never move again.
+            // Every exit path releases the movement hold, including the cancel path.
             com.otectus.magicnpcs.core.caster.ManagedCasterState.of(caster).setChannelling(false);
         }
     }
 
     /** @return true if the spell should stop channelling for a reason only Iron's knows. */
     public boolean spellWantsToStop() {
-        return target != null && spell.shouldAIStopCasting(level, caster, target);
+        if (target == null) {
+            return false;
+        }
+        try {
+            return spell.shouldAIStopCasting(level, caster, target);
+        } catch (RuntimeException | LinkageError failure) {
+            // A stop query that throws is answered "stop": continuing to channel a spell whose own
+            // code is failing is the worse of the two outcomes, and the session ends cleanly either way.
+            diagnose(caster, spell, "shouldAIStopCasting", failure);
+            return true;
+        }
+    }
+
+    /** @return true once an effect hook has been entered, whether or not it returned normally. */
+    public boolean effectEntered() {
+        return effectEntered;
     }
 
     /** Point the session at a new target (the goal re-validates its target every tick). */

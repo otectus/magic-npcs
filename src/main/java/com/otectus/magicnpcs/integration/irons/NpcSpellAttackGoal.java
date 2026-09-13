@@ -35,7 +35,9 @@ import net.minecraft.world.item.ItemStack;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Universal NPC casting goal: drives spell selection from a datapack {@link SpellcasterLoadout}. Per
@@ -89,6 +91,9 @@ public class NpcSpellAttackGoal extends Goal {
         this.loadout = loadout;
         this.builtForGeneration = LoadoutManager.generation();
         boolean support = false;
+        // Canonical id → the entry that claimed it, so a second spelling of the same spell can be
+        // recognised as a duplicate rather than becoming a second spell.
+        Map<ResourceLocation, Resolved> byCanonicalId = new HashMap<>();
         for (LoadoutEntry entry : loadout.spells()) {
             AbstractSpell spell = IronsBridge.getSpell(entry.spell());
             if (spell == null) {
@@ -108,13 +113,48 @@ public class NpcSpellAttackGoal extends Goal {
                         SpellCompat.unsupportedReason(spell));
                 continue;
             }
+            // One spell is one entry, whatever spelling reached it. A loadout listing both `devour`
+            // and `irons_spellbooks:devour` used to produce two entries: two independent cooldowns,
+            // two lots of selection weight and, if their overrides disagreed, two answers to "how
+            // long does this rest" depending on which one was picked (roadmap MN-005). The first
+            // entry in author order wins and the later one is dropped, named, with the reason.
+            ResourceLocation canonical = spell.getSpellResource();
+            Resolved existing = canonical == null ? null : byCanonicalId.get(canonical);
+            if (existing != null) {
+                warnDuplicateAlias(loadout, existing, entry, canonical);
+                continue;
+            }
             support |= entry.role() == LoadoutEntry.Role.SUPPORT;
-            spells.add(new Resolved(entry, spell));
+            Resolved resolved = new Resolved(entry, spell, canonical == null ? entry.spell() : canonical);
+            spells.add(resolved);
+            byCanonicalId.put(resolved.canonicalId(), resolved);
         }
         this.hasSupportSpell = support;
         // No control flags by default (ADR 0002): claiming LOOK makes an equal-or-better-priority
         // native ranged goal starve this one, and makes this one preempt a lower-priority bow goal.
         setFlags(MagicNpcsConfig.castingGoalUsesLookFlag() ? EnumSet.of(Flag.LOOK) : EnumSet.noneOf(Flag.class));
+    }
+
+    /**
+     * Report a second entry that resolves to a spell the loadout already lists.
+     *
+     * <p>Both spellings are named, because "duplicate spell" without them sends an author looking for
+     * two identical lines that are not there. A disagreeing override is called out separately: the
+     * kept entry's value is the one that applies, and silently using it would look like the dropped
+     * entry's cooldown had simply been ignored.
+     */
+    private static void warnDuplicateAlias(SpellcasterLoadout loadout, Resolved kept,
+                                           LoadoutEntry dropped, ResourceLocation canonical) {
+        MagicNpcs.LOGGER.warn("Loadout {} ({}): '{}' and '{}' are both {} — keeping the first and "
+                        + "dropping the second, so the spell has one cooldown and one weight.",
+                loadout.source(), loadout.entityType(), kept.entry().spell(), dropped.spell(), canonical);
+        if (!java.util.Objects.equals(kept.entry().cooldownTicks(), dropped.cooldownTicks())
+                || !java.util.Objects.equals(kept.entry().cooldownMultiplier(), dropped.cooldownMultiplier())
+                || kept.entry().level() != dropped.level()) {
+            MagicNpcs.LOGGER.warn("Loadout {} ({}): the dropped entry '{}' overrides cooldown/level "
+                            + "differently from '{}'. The first entry's values apply.",
+                    loadout.source(), loadout.entityType(), dropped.spell(), kept.entry().spell());
+        }
     }
 
     private ManagedCasterState state() {
@@ -357,13 +397,28 @@ public class NpcSpellAttackGoal extends Goal {
      */
     private void beginCast() {
         boolean wasOutOfCombat = target == null;
-        // Last look before anything is spent. The wind-up is real time: a dialog can have opened, an
-        // owner can have been assigned, a faction can have turned friendly since the decision was
-        // taken. Re-resolving here rather than reusing the cached adapter costs one lookup per cast
-        // and is the difference between aborting and firing at someone we now call an ally.
+        // The shared floor, first and in one call. Everything this checks — framework eligibility,
+        // allow-list, mob-castability, target identity/world/liveness/relationship, canonical
+        // cooldown, mana — is checked identically for a scripted or dialog-triggered cast, so the two
+        // routes cannot disagree about what is permitted (roadmap MN-003). It writes nothing, so an
+        // abort here still costs the caster exactly nothing.
+        CastRequest request = CastRequest.of(mob, target, chosen.spell(), chosen.entry().spell(),
+                effectiveLevel(chosen), MagicNpcCastEvent.CastSource.AI);
+        CastRequestValidator.Verdict verdict = CastRequestValidator.validate(request);
+        if (!verdict.ok()) {
+            if (MagicNpcsConfig.debugLogging()) {
+                MagicNpcs.LOGGER.info("[cast] {} abandoned {} at commit: {}",
+                        EntityType.getKey(mob.getType()), chosen.entry().spell(), verdict.describe());
+            }
+            scheduleNextDecision(wasOutOfCombat ? idleInterval() : combatInterval());
+            endAttempt();
+            return;
+        }
+        // Last look before anything is spent, and the AI's own extra condition: the wind-up is real
+        // time, so a dialog can have opened or an owner been assigned since the decision was taken.
+        // canSupportCastNow is AI policy rather than a shared rule, which is why it stays here.
         NpcAdapter live = NpcAdapters.resolve(mob);
-        boolean stateAllows = wasOutOfCombat ? live.canSupportCastNow(mob) : live.canCastNow(mob);
-        if (!stateAllows || (target != null && !live.canCastAt(mob, target))) {
+        if (wasOutOfCombat && !live.canSupportCastNow(mob)) {
             if (MagicNpcsConfig.debugLogging()) {
                 MagicNpcs.LOGGER.info("[cast] {} abandoned {} at commit: {}",
                         EntityType.getKey(mob.getType()), chosen.entry().spell(),
@@ -377,8 +432,9 @@ public class NpcSpellAttackGoal extends Goal {
         }
         // Announce the cast while it is still free to abort. A Forge listener or an NPC script may
         // veto here; the abort path below is the existing no-mana, no-cooldown one, so a vetoed cast
-        // costs the caster exactly nothing.
-        if (!MagicNpcEvents.postCastPre(mob, chosen.entry().spell(), effectiveLevel(chosen), target,
+        // costs the caster exactly nothing. The canonical id is published, not the author's spelling,
+        // so a listener sees one identity for one spell however the loadout spelled it.
+        if (!MagicNpcEvents.postCastPre(mob, request.canonicalId(), request.level(), target,
                 MagicNpcCastEvent.CastSource.AI)) {
             scheduleNextDecision(wasOutOfCombat ? idleInterval() : combatInterval());
             endAttempt();
@@ -397,9 +453,9 @@ public class NpcSpellAttackGoal extends Goal {
             }
         }
         MobCastSession.Start start = MobCastSession.begin(mob, target, chosen.spell(),
-                effectiveLevel(chosen), resolveCastTime(chosen), MagicNpcCastEvent.CastSource.AI);
+                request.level(), resolveCastTime(chosen), MagicNpcCastEvent.CastSource.AI);
         if (!start.started()) {
-            MagicNpcEvents.postFailed(mob, chosen.entry().spell(), effectiveLevel(chosen), target,
+            MagicNpcEvents.postFailed(mob, request.canonicalId(), request.level(), target,
                     MagicNpcCastEvent.CastSource.AI, start.refusal() == null
                             ? String.valueOf(start.detail()) : start.refusal().description());
             // Space the next decision regardless, so a spell that keeps refusing doesn't spam.
@@ -408,13 +464,13 @@ public class NpcSpellAttackGoal extends Goal {
             return;
         }
         session = start.session();
-        MagicNpcEvents.postStarted(mob, chosen.entry().spell(), effectiveLevel(chosen), target,
+        MagicNpcEvents.postStarted(mob, request.canonicalId(), request.level(), target,
                 MagicNpcCastEvent.CastSource.AI);
         mob.swing(InteractionHand.MAIN_HAND);
         // Cooldown starts with the cast, not with its completion: a channel that is interrupted must
         // not be immediately retryable, or an ATTACK caster whose target keeps ducking behind cover
         // replays its telegraph on every decision (backlog B13).
-        state().startCooldown(chosen.entry().spell(), mob.tickCount + resolveCooldown(chosen));
+        state().startCooldown(mob, chosen.canonicalId(), resolveCooldown(chosen));
         scheduleNextDecision(wasOutOfCombat ? idleInterval() : combatInterval());
         // An INSTANT spell resolves on its first session tick; drive it now so windup=0 still fires
         // in the tick the goal started, as it did before 0.6.2.
@@ -495,7 +551,7 @@ public class NpcSpellAttackGoal extends Goal {
         boolean anyAttack = false;
         for (Resolved r : spells) {
             LoadoutEntry e = r.entry();
-            if (state.cooldownRemaining(e.spell(), mob.tickCount) > 0) {
+            if (state.cooldownRemaining(r.canonicalId(), mob) > 0) {
                 continue;
             }
             if (!IronsBridge.canAfford(mob, r.spell(), effectiveLevel(r))) {
@@ -632,7 +688,11 @@ public class NpcSpellAttackGoal extends Goal {
      * adapter is already re-resolved on a slow cadence, so this is cheap.
      */
     int effectiveLevel(Resolved r) {
-        int floor = r.entry().level();
+        // Bound the authored floor before anything else. Through 0.9.0 the no-rank branches returned
+        // it untouched, so a datapack `"level": 0` or `"level": 900` reached Iron's mana, cast-time
+        // and effect arithmetic unchecked — the same unbounded input the external routes could supply
+        // (roadmap MN-003). The rank bonus is applied on top of an already valid level.
+        int floor = CastRequest.boundLevel(r.spell(), r.entry().level());
         double perRank = MagicNpcsConfig.rankLevelPerRank();
         if (perRank <= 0.0) {
             return floor;
@@ -642,8 +702,10 @@ public class NpcSpellAttackGoal extends Goal {
             return floor;
         }
         int ceiling = Math.min(r.spell().getMaxLevel(), floor + MagicNpcsConfig.rankLevelMaxBonus());
-        int ranked = floor + (int) (rank * perRank);
-        return Math.max(floor, Math.min(ranked, ceiling));
+        // (int) of a double product is a narrowing cast; a huge rank times a huge per-rank value would
+        // otherwise saturate to Integer.MAX_VALUE and then overflow the addition below.
+        long ranked = floor + (long) (rank * perRank);
+        return (int) Math.max(floor, Math.min(ranked, ceiling));
     }
 
     /** @return the level {@code entry} would be cast at right now, for the diagnostic table. */
@@ -708,10 +770,15 @@ public class NpcSpellAttackGoal extends Goal {
      *         same spell every tick.
      */
     static int cooldownFor(Mob mob, ResourceLocation spellId, AbstractSpell spell) {
+        // Compared canonically: a script asking for `irons_spellbooks:devour` must find the loadout
+        // entry an author wrote as `devour`, or the two paths give one spell two different rests.
+        ResourceLocation canonical = spell != null && spell.getSpellResource() != null
+                ? spell.getSpellResource()
+                : IronsBridge.canonicalId(spellId);
         NpcSpellAttackGoal goal = CasterReconciler.findSpellGoal(mob);
         if (goal != null) {
             for (Resolved r : goal.spells) {
-                if (r.entry().spell().equals(spellId)) {
+                if (r.canonicalId().equals(canonical)) {
                     return resolveCooldown(r.entry(), r.spell());
                 }
             }
@@ -776,9 +843,14 @@ public class NpcSpellAttackGoal extends Goal {
         return out;
     }
 
-    /** @return ticks until {@code spell} comes off cooldown, or 0 if it is ready. */
+    /**
+     * @return ticks until {@code spell} comes off cooldown, or 0 if it is ready. Canonicalised, so
+     *         {@code /magicnpcs why} reports the same rest for an alias entry as for the spell.
+     *         Saturated into an {@code int} for display only — the stored deadline stays a long.
+     */
     int cooldownRemaining(ResourceLocation spell) {
-        return state().cooldownRemaining(spell, mob.tickCount);
+        long remaining = state().cooldownRemaining(IronsBridge.canonicalId(spell), mob);
+        return (int) Math.min(Integer.MAX_VALUE, remaining);
     }
 
     /** @return ticks until this goal will next consider casting, or 0 if it would consider it now. */
@@ -861,5 +933,12 @@ public class NpcSpellAttackGoal extends Goal {
         return 0;
     }
 
-    private record Resolved(LoadoutEntry entry, AbstractSpell spell) {}
+    /**
+     * One loadout entry paired with the spell it resolved to, and with that spell's one canonical id.
+     *
+     * <p>{@code entry.spell()} is what the author wrote and stays that way for diagnostics;
+     * {@code canonicalId} is what cooldowns, retained keys and cast events use, so an alias cannot
+     * become a second spell with its own rest timer (roadmap MN-005).
+     */
+    private record Resolved(LoadoutEntry entry, AbstractSpell spell, ResourceLocation canonicalId) {}
 }

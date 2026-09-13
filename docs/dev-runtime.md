@@ -79,6 +79,47 @@ Curios resolves from Modrinth/cache. All `libs/*.jar` are gitignored.
 **Run it:** `./gradlew runGameTestServer -PdevRuntime` boots a headless server **with Iron's +
 Recruits** and runs the casting GameTests for real (see status below).
 
+### `-PluminousRuntime` — Luminous: Beasts runtime acceptance
+
+Luminous: Beasts is **never compiled against** and **never bundled** — it is All-Rights-Reserved. All integration
+remains black-box: do not decompile, modify, or copy from the jar. Reading entity class names from `/magicnpcs why`
+output is permitted runtime observation. This profile stages Luminous alongside the Iron's stack (`-PdevRuntime`) to
+test whether spellcasting reaches Luminous mobs through generic AI mechanisms.
+
+**Run it:** `./gradlew runClient -PdevRuntime -PluminousRuntime` launches a creative-mode client with both
+Iron's (and its dependencies) **and** the Luminous runtime jar.
+
+**Acceptance protocol** (see `docs/MAGIC_NPCS_0.9.0.md` lines 376–391 for the full spec):
+
+1. Spawn each Luminous mob (Phoenix, Witch Doctor) and confirm via `/forge mods` that Luminous is loaded with the 
+   version pinned in `gradle.properties:51-52`. Use `/data get entity @e[type=!player,sort=nearest,limit=1] id` to 
+   read the exact registry IDs — never hard-code from old sources.
+
+2. Create a minimal test loadout using the spec body (lines 248–268: single `magic_missile` spell, `coexist` 
+   native-attack policy, cast_chance 1.0, zero windup). Place the two JSON files in a fixture datapack 
+   (`data/luminous_repro/spellcasters/`) under `docs/compat/fixtures/luminous_repro/` (own namespace, never 
+   bundled). Copy into the world's datapacks, `/reload`, and confirm `/magicnpcs validate` shows both loadouts as Active (none Rejected or Skipped (mod absent)).
+
+3. For each mob: record `/magicnpcs loadout entity <sel>` and `/magicnpcs why <sel>` output (goal priority/class/flags/running, heartbeat age).
+
+4. Set yourself as a survival-mode hostile within 24 blocks. Enable `debugLogging: true` in `config/magicnpcs-common.toml` 
+   and relaunch; in `run/logs/debug.log` (or `logs/debug.log` in packaged installs), find lines matching `[magicnpcs] cast started:` and `[magicnpcs] cast completed:` 
+   (each with entity type, UUID, and spell id). Also observe the Iron's projectile and the mob's own ranged attack under `coexist`.
+
+5. Repeat the observation after: target loss (`/tp` beyond range and back), chunk reload (`/tp` 300+ blocks for 10 s, 
+   return), and `/reload`. After each, exactly one casting goal must exist with fresh heartbeat.
+
+6. Double-tick check: mana drops by exactly one spell cost per cast; no duplicated cooldowns or duplicate casts.
+
+7. Map the outcome to `docs/MAGIC_NPCS_0.9.0.md` rows 1–6 (lines 282–289). If casts observed and fresh heartbeat: 
+   row 1 (add regression documentation). If `/magicnpcs why` reports a state/mana/range/LOS blocker: row 2 (fix 
+   the generic casting gate). If goal blocked by control contention: row 3 (repair goal injection). If goal execution 
+   stale: row 4 (implement fallback driver). If goal deleted or replaced: row 5 (add goal-repair seam). If loadout 
+   never resolves: row 6 (correct the fixture). Follow each row's implementation response.
+
+8. Record the raw goal tables, heartbeat state, spell observations, and outcome classification in 
+   `docs/compat/luminous-run.md` (to be created after the run).
+
 ## Offline boot check (no companions needed)
 
 Confirm the mod boots cleanly **without** Iron's/Recruits — the soft-dep "absent"

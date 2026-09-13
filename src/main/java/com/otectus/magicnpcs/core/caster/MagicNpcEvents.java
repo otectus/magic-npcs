@@ -1,12 +1,15 @@
 package com.otectus.magicnpcs.core.caster;
 
+import com.otectus.magicnpcs.MagicNpcs;
 import com.otectus.magicnpcs.api.event.MagicNpcCastEvent;
 import com.otectus.magicnpcs.api.event.MagicNpcSchoolChangedEvent;
 import com.otectus.magicnpcs.core.SchoolData;
 import com.otectus.magicnpcs.core.adapter.MagicNpcSignal;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
+import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraftforge.common.MinecraftForge;
@@ -14,7 +17,6 @@ import net.minecraftforge.common.MinecraftForge;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -47,8 +49,17 @@ public final class MagicNpcEvents {
     private static final String KEY_NEW_SCHOOL = "new_school";
     private static final String KEY_MODE = "mode";
 
-    /** Casters with a started cast that has not terminated yet. */
-    private static final Set<UUID> CAST_OPEN = ConcurrentHashMap.newKeySet();
+    /**
+     * Casters with a started cast that has not terminated yet, and which cast it is.
+     *
+     * <p>A bare set of caster ids was not enough. Completion is dispatched synchronously, so a
+     * listener may answer one by starting a replacement cast on the same caster — and the old cast's
+     * second terminal, arriving after that, would consume the replacement's ownership and silently
+     * swallow the replacement's real ending (roadmap MN-004/MN-013). A terminal now has to name the
+     * cast it is ending: a stale one finds a different spell recorded and is dropped, which is exactly
+     * what it deserves.
+     */
+    private static final Map<UUID, ResourceLocation> CAST_OPEN = new ConcurrentHashMap<>();
 
     private MagicNpcEvents() {}
 
@@ -89,23 +100,36 @@ public final class MagicNpcEvents {
         if (caster == null || spellId == null) {
             return;
         }
-        CAST_OPEN.add(caster.getUUID());
-        MinecraftForge.EVENT_BUS.post(
-                new MagicNpcCastEvent.Started(caster, spellId, level, target, source));
-        NpcAdapters.resolve(caster).publish(caster, MagicNpcSignal.of(MagicNpcSignal.CAST_STARTED,
+        CAST_OPEN.put(caster.getUUID(), spellId);
+        logCast("started", caster, spellId);
+        post(caster, "started", new MagicNpcCastEvent.Started(caster, spellId, level, target, source));
+        publish(caster, "started", MagicNpcSignal.of(MagicNpcSignal.CAST_STARTED,
                 castPayload(spellId, level, target, source, null)));
     }
 
     /** The cast ran to the end of its duration. Dropped if this caster's cast already terminated. */
     public static void postCompleted(Mob caster, ResourceLocation spellId, int level,
                                      LivingEntity target, MagicNpcCastEvent.CastSource source) {
-        if (caster == null || spellId == null || !CAST_OPEN.remove(caster.getUUID())) {
+        if (caster == null || spellId == null || !CAST_OPEN.remove(caster.getUUID(), spellId)) {
             return;
         }
-        MinecraftForge.EVENT_BUS.post(
-                new MagicNpcCastEvent.Completed(caster, spellId, level, target, source));
-        NpcAdapters.resolve(caster).publish(caster, MagicNpcSignal.of(MagicNpcSignal.CAST_COMPLETED,
+        logCast("completed", caster, spellId);
+        post(caster, "completed", new MagicNpcCastEvent.Completed(caster, spellId, level, target, source));
+        publish(caster, "completed", MagicNpcSignal.of(MagicNpcSignal.CAST_COMPLETED,
                 castPayload(spellId, level, target, source, null)));
+    }
+
+
+    /**
+     * The one operator-visible trace of a cast lifecycle. Nothing else prints Started or Completed, so
+     * a run that is investigating whether a mob casts at all has only mana to go on; this makes the
+     * two announcements greppable in the log without adding a per-cast line to a normal server.
+     */
+    private static void logCast(String phase, Mob caster, ResourceLocation spellId) {
+        if (MagicNpcsConfig.debugLogging()) {
+            MagicNpcs.LOGGER.debug("[magicnpcs] cast {}: {} ({}) casting {}", phase,
+                    EntityType.getKey(caster.getType()), caster.getUUID(), spellId);
+        }
     }
 
     /** The cast ended early. Dropped if this caster's cast already terminated. */
@@ -130,7 +154,7 @@ public final class MagicNpcEvents {
         if (caster == null || spellId == null) {
             return;
         }
-        NpcAdapters.resolve(caster).publish(caster, MagicNpcSignal.of(MagicNpcSignal.CAST_FAILED,
+        publish(caster, "failed", MagicNpcSignal.of(MagicNpcSignal.CAST_FAILED,
                 castPayload(spellId, level, target, source, reason)));
     }
 
@@ -166,7 +190,12 @@ public final class MagicNpcEvents {
 
     /** @return true while this caster has a started cast that has not terminated yet. */
     public static boolean isCastOpen(Mob caster) {
-        return caster != null && CAST_OPEN.contains(caster.getUUID());
+        return caster != null && CAST_OPEN.containsKey(caster.getUUID());
+    }
+
+    /** @return the spell this caster's open cast is, or {@code null} when it has none. */
+    public static ResourceLocation openCastSpell(Mob caster) {
+        return caster == null ? null : CAST_OPEN.get(caster.getUUID());
     }
 
     /** @return how many casts are open, for the diagnostics summary. */
@@ -187,13 +216,47 @@ public final class MagicNpcEvents {
                                               LivingEntity target,
                                               MagicNpcCastEvent.CastSource source, String reason,
                                               boolean guarded) {
-        if (guarded && !CAST_OPEN.remove(caster.getUUID())) {
+        if (guarded && !CAST_OPEN.remove(caster.getUUID(), spellId)) {
             return;
         }
-        MinecraftForge.EVENT_BUS.post(
+        post(caster, "cancelled",
                 new MagicNpcCastEvent.Cancelled(caster, spellId, level, target, source, reason));
-        NpcAdapters.resolve(caster).publish(caster, MagicNpcSignal.of(MagicNpcSignal.CAST_CANCELLED,
+        publish(caster, "cancelled", MagicNpcSignal.of(MagicNpcSignal.CAST_CANCELLED,
                 castPayload(spellId, level, target, source, reason)));
+    }
+
+    /**
+     * Post a terminal or start event without letting a listener's failure escape.
+     *
+     * <p>These announcements are made from the middle of a cast session's terminal path. A third-party
+     * listener that throws used to take the throw back through the session, past its cleanup, and on
+     * into the goal selector — one misbehaving listener could leave a caster channelling forever and
+     * stop the rest of that mob's AI (roadmap MN-004). The failure is reported once, against the
+     * listener's phase, and the cast finishes.
+     *
+     * <p>Deliberately not applied to {@link #postCastPre}: a veto is a contract, and a listener that
+     * throws while deciding whether a cast may happen has not answered. That path keeps Forge's own
+     * behaviour so a broken veto cannot be read as consent.
+     */
+    private static void post(Mob caster, String phase, Object event) {
+        try {
+            MinecraftForge.EVENT_BUS.post((net.minecraftforge.eventbus.api.Event) event);
+        } catch (RuntimeException | LinkageError failure) {
+            MagicNpcs.LOGGER.error("[magicnpcs] a listener threw handling the cast-{} event for {}; "
+                            + "the cast is unaffected and other casters continue.",
+                    phase, EntityType.getKey(caster.getType()), failure);
+        }
+    }
+
+    /** As {@link #post}, for the adapter signal half of the same announcement. */
+    private static void publish(Mob caster, String phase, MagicNpcSignal signal) {
+        try {
+            NpcAdapters.resolve(caster).publish(caster, signal);
+        } catch (RuntimeException | LinkageError failure) {
+            MagicNpcs.LOGGER.error("[magicnpcs] an adapter threw publishing the cast-{} signal for {}; "
+                            + "the cast is unaffected and other casters continue.",
+                    phase, EntityType.getKey(caster.getType()), failure);
+        }
     }
 
     /** The shared payload shape. {@code target} and {@code reason} are absent rather than null. */

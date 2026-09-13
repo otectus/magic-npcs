@@ -12,6 +12,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -206,28 +207,87 @@ public final class LineOfFire {
     }
 
     /**
-     * Squared gap between {@code box} and the segment a→b, zero when they touch.
+     * Squared gap between {@code box} and the segment a→b, zero when they touch or cross.
      *
-     * <p>Takes the point on the segment closest to the box's centre, then clamps that point into the
-     * box; the leftover offset is the gap. Measuring against the whole body rather than a single
-     * reference point is what makes {@code safety_radius} mean "clearance around the shot" for
-     * entities of any height.
+     * <p>Until 0.9.1 this projected the box's <em>centre</em> onto the segment and measured that one
+     * point. That is not the minimum distance between a segment and a box: a segment can run clean
+     * through a body while the centre-projected point sits outside it. The audit's witness is a
+     * villager-flat box [(0,0,0),(10,1,1)] and the segment (-5,-4,0.5)→(15,14,0.5), which is strictly
+     * inside the box at t = 13/50 yet measured a squared gap of 3.94 — a silent "clear" through an ally
+     * (MN-011).
+     *
+     * <p>Exact replacement. Per axis the offset out of the slab,
+     * {@code f(t) = max(min - p(t), 0, p(t) - max)}, is piecewise linear in t with corners only where
+     * the segment crosses that axis' two slab planes. Cut [0,1] at those (at most six) crossings and on
+     * each piece every axis is a single linear term, so the squared distance is one convex quadratic
+     * {@code A t² + B t + C} whose minimum is closed-form. The smallest piece minimum is the answer,
+     * exactly zero whenever the segment enters the box.
      */
-    private static double distanceToSegmentSqr(AABB box, Vec3 a, Vec3 b) {
-        Vec3 p = closestPointOnSegment(box.getCenter(), a, b);
-        double dx = Math.max(box.minX - p.x, Math.max(0.0, p.x - box.maxX));
-        double dy = Math.max(box.minY - p.y, Math.max(0.0, p.y - box.maxY));
-        double dz = Math.max(box.minZ - p.z, Math.max(0.0, p.z - box.maxZ));
-        return dx * dx + dy * dy + dz * dz;
-    }
+    static double distanceToSegmentSqr(AABB box, Vec3 a, Vec3 b) {
+        double[] origin = {a.x, a.y, a.z};
+        double[] dir = {b.x - a.x, b.y - a.y, b.z - a.z};
+        double[] min = {box.minX, box.minY, box.minZ};
+        double[] max = {box.maxX, box.maxY, box.maxZ};
 
-    private static Vec3 closestPointOnSegment(Vec3 p, Vec3 a, Vec3 b) {
-        Vec3 ab = b.subtract(a);
-        double abLen2 = ab.lengthSqr();
-        if (abLen2 < 1.0E-6) {
-            return a;
+        // The piece boundaries: the ends, plus every slab-plane crossing strictly inside the segment.
+        double[] cuts = new double[8];
+        int cutCount = 0;
+        cuts[cutCount++] = 0.0;
+        cuts[cutCount++] = 1.0;
+        for (int axis = 0; axis < 3; axis++) {
+            if (dir[axis] == 0.0) {
+                continue;
+            }
+            double lo = (min[axis] - origin[axis]) / dir[axis];
+            double hi = (max[axis] - origin[axis]) / dir[axis];
+            if (lo > 0.0 && lo < 1.0) {
+                cuts[cutCount++] = lo;
+            }
+            if (hi > 0.0 && hi < 1.0) {
+                cuts[cutCount++] = hi;
+            }
         }
-        double t = Math.max(0.0, Math.min(1.0, p.subtract(a).dot(ab) / abLen2));
-        return a.add(ab.scale(t));
+        Arrays.sort(cuts, 0, cutCount);
+
+        double best = Double.MAX_VALUE;
+        for (int i = 0; i + 1 < cutCount; i++) {
+            double lo = cuts[i];
+            double hi = cuts[i + 1];
+            if (hi <= lo) {
+                continue;
+            }
+            // Inside a piece the regime of each axis (below the slab, inside it, above it) is fixed,
+            // so read it off the midpoint and collect f(t) = u + v t for each axis.
+            double mid = 0.5 * (lo + hi);
+            double quadA = 0.0;
+            double quadB = 0.0;
+            double quadC = 0.0;
+            for (int axis = 0; axis < 3; axis++) {
+                double u;
+                double v;
+                double at = origin[axis] + mid * dir[axis];
+                if (at < min[axis]) {
+                    u = min[axis] - origin[axis];
+                    v = -dir[axis];
+                } else if (at > max[axis]) {
+                    u = origin[axis] - max[axis];
+                    v = dir[axis];
+                } else {
+                    continue; // inside the slab: contributes nothing on this piece
+                }
+                quadA += v * v;
+                quadB += 2.0 * u * v;
+                quadC += u * u;
+            }
+            double t = lo;
+            if (quadA > 0.0) {
+                t = Math.max(lo, Math.min(hi, -quadB / (2.0 * quadA)));
+            }
+            double value = (quadA * t + quadB) * t + quadC;
+            if (value < best) {
+                best = value;
+            }
+        }
+        return Math.max(0.0, best);
     }
 }

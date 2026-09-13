@@ -39,6 +39,13 @@ public final class LoadoutParser {
     /** Above this a cooldown is almost certainly a seconds value nobody converted to ticks. */
     private static final int SUSPICIOUS_COOLDOWN_TICKS = 12000;
 
+    /**
+     * A cooldown multiplier above this is reported. Iron's longest cooldowns are minutes, so a
+     * multiplier of a thousand already means "never again" — the author has almost certainly read
+     * the multiplier backwards (it scales the cooldown, not the rate).
+     */
+    private static final double SUSPICIOUS_COOLDOWN_MULTIPLIER = 1000.0;
+
     private LoadoutParser() {}
 
     /**
@@ -367,7 +374,35 @@ public final class LoadoutParser {
         }
         Double cooldownMult = null;
         if (o.has(LoadoutJson.COOLDOWN_MULTIPLIER)) {
-            cooldownMult = Math.max(0.0, GsonHelper.getAsDouble(o, LoadoutJson.COOLDOWN_MULTIPLIER));
+            // Validated the same way cast_time_multiplier is, and for a sharper reason. The old
+            // Math.max(0.0, x) clamp does nothing to NaN — Math.max(0.0, NaN) is NaN — and nothing to
+            // infinity, and both reached the cooldown arithmetic. Combined with the overflow this
+            // release fixes in CooldownResolver, that is how a positive multiplier could end up
+            // producing the shortest cooldown the config allows (roadmap MN-017).
+            double raw;
+            try {
+                raw = GsonHelper.getAsDouble(o, LoadoutJson.COOLDOWN_MULTIPLIER);
+            } catch (Exception ex) {
+                problems.add(LoadoutProblem.error("NOT_A_NUMBER",
+                        pointer + "/" + LoadoutJson.COOLDOWN_MULTIPLIER,
+                        "\"" + LoadoutJson.COOLDOWN_MULTIPLIER + "\" must be a number"));
+                return null;
+            }
+            if (!Double.isFinite(raw) || raw < 0.0) {
+                problems.add(LoadoutProblem.error("COOLDOWN_MULTIPLIER_INVALID",
+                        pointer + "/" + LoadoutJson.COOLDOWN_MULTIPLIER,
+                        "cooldown_multiplier must be a finite number zero or greater",
+                        "a negative, NaN or infinite multiplier has no cooldown it could mean"));
+                return null;
+            }
+            if (raw > SUSPICIOUS_COOLDOWN_MULTIPLIER) {
+                problems.add(LoadoutProblem.warning("COOLDOWN_MULTIPLIER_SUSPICIOUS",
+                        pointer + "/" + LoadoutJson.COOLDOWN_MULTIPLIER,
+                        "cooldown_multiplier=" + raw + " makes this spell effectively uncastable",
+                        "the multiplier scales Iron's own cooldown, so 2.0 is twice as long, not "
+                                + "twice as often"));
+            }
+            cooldownMult = raw;
         }
         Integer windup = null;
         if (o.has(LoadoutJson.WINDUP)) {

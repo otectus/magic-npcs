@@ -20,9 +20,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * Reconciliation now updates this record in place and only initialises mana on a caster's
  * <em>first</em> activation.
  *
- * <p>Keyed by entity UUID and in-memory only: cooldown deadlines are {@code mob.tickCount} values,
- * which are not saved, so persisting them would be meaningless. That is the right scope — an entity
- * that unloads is no longer in a fight. Entries are dropped when the mob is removed.
+ * <p>Keyed by entity UUID and in-memory only: cooldown deadlines are level game-time values, which
+ * are meaningful only while that level is loaded. That is the right scope — an entity that unloads is
+ * no longer in a fight — and nothing here is persisted. Entries are dropped when the mob is removed.
  *
  * <p>Vanilla-only, so the core and the reconciler share it without touching Iron's.
  */
@@ -30,8 +30,18 @@ public final class ManagedCasterState {
 
     private static final Map<UUID, ManagedCasterState> STATES = new ConcurrentHashMap<>();
 
-    /** Spell id → the {@code mob.tickCount} at which it comes off cooldown. */
-    private final Map<ResourceLocation, Integer> readyAtTick = new HashMap<>();
+    /**
+     * Canonical spell id → the level game time at which it comes off cooldown.
+     *
+     * <p>Two things changed here in 0.9.1. The deadline is a {@code long} on the level's game-time
+     * clock rather than an {@code int} on {@code mob.tickCount}: {@code CooldownResolver} can return
+     * {@link Integer#MAX_VALUE} for a deliberately enormous authored cooldown, and adding that to a
+     * tick count overflowed straight past the comparison into "ready now" — a large positive cooldown
+     * made a spell <em>faster</em> (roadmap MN-017). The key is the spell's canonical registry id
+     * rather than whatever the loadout author typed, so an alias and its canonical form share one
+     * cooldown instead of handing the caster two (MN-005).
+     */
+    private final Map<ResourceLocation, Long> readyAtGameTime = new HashMap<>();
 
     private int catalogGeneration = -1;
     private ResourceLocation loadoutSource;
@@ -130,14 +140,66 @@ public final class ManagedCasterState {
 
     // --- cooldowns ----------------------------------------------------------------------------
 
-    /** @return ticks until {@code spell} comes off cooldown, or 0 if it is ready. */
-    public int cooldownRemaining(ResourceLocation spell, int now) {
-        Integer readyAt = readyAtTick.get(spell);
-        return readyAt == null ? 0 : Math.max(0, readyAt - now);
+    /**
+     * The clock every cooldown deadline is measured on.
+     *
+     * <p>{@code mob.tickCount} is not it. It counts from zero each time an entity is loaded, so a
+     * deadline written before an unload compared against a tick count that had restarted read as
+     * "resting for another twenty minutes". The level's game time is monotonic for as long as the
+     * level is loaded, which is exactly the lifetime of this in-memory state.
+     */
+    public static long gameTime(Mob mob) {
+        return mob.level().getGameTime();
     }
 
-    public void startCooldown(ResourceLocation spell, int readyAt) {
-        readyAtTick.put(spell, readyAt);
+    /** @return ticks until {@code spell} comes off cooldown, or 0 if it is ready. */
+    public long cooldownRemaining(ResourceLocation spell, long now) {
+        Long readyAt = readyAtGameTime.get(spell);
+        return readyAt == null ? 0L : Math.max(0L, readyAt - now);
+    }
+
+    /** As {@link #cooldownRemaining(ResourceLocation, long)}, read against {@code mob}'s own clock. */
+    public long cooldownRemaining(ResourceLocation spell, Mob mob) {
+        return cooldownRemaining(spell, gameTime(mob));
+    }
+
+    /**
+     * Start {@code spell}'s cooldown, now, for {@code cooldownTicks}.
+     *
+     * <p>Saturating rather than wrapping: {@code CooldownResolver} is allowed to answer
+     * {@link Integer#MAX_VALUE} for an authored cooldown that is effectively "never again", and that
+     * has to stay "never again" rather than overflowing the deadline into the past (MN-017).
+     */
+    public void startCooldown(Mob mob, ResourceLocation spell, long cooldownTicks) {
+        startCooldownAt(spell, saturatingAdd(gameTime(mob), Math.max(0L, cooldownTicks)));
+    }
+
+    /** Record an absolute game-time deadline. Never shortens a deadline that is already later. */
+    public void startCooldownAt(ResourceLocation spell, long readyAtGameTime) {
+        this.readyAtGameTime.merge(spell, readyAtGameTime, Math::max);
+    }
+
+    /** Forget {@code spell}'s cooldown entirely. */
+    public void clearCooldown(ResourceLocation spell) {
+        readyAtGameTime.remove(spell);
+    }
+
+    /**
+     * Rewrite every cooldown key through {@code canonical}, merging entries that collapse onto the
+     * same spell.
+     *
+     * <p>The merge keeps the <b>longest</b> remaining deadline. An alias and its canonical form are one
+     * spell, so the caster owes the longer of the two rests; taking the shorter would let an author
+     * shorten a cooldown simply by spelling the id a second way (MN-005).
+     */
+    public void normalizeCooldownKeys(java.util.function.UnaryOperator<ResourceLocation> canonical) {
+        Map<ResourceLocation, Long> merged = new HashMap<>(readyAtGameTime.size());
+        readyAtGameTime.forEach((spell, readyAt) -> {
+            ResourceLocation key = canonical.apply(spell);
+            merged.merge(key == null ? spell : key, readyAt, Math::max);
+        });
+        readyAtGameTime.clear();
+        readyAtGameTime.putAll(merged);
     }
 
     /**
@@ -145,9 +207,19 @@ public final class ManagedCasterState {
      *
      * <p>Preserving a still-present spell's cooldown across a loadout change is the whole point: an
      * author retuning a datapack mid-fight should not hand every caster a free volley.
+     *
+     * <p>{@code stillPresent} must hold canonical ids, for the same reason the map does: a raw alias
+     * would not match its own canonical key and the cooldown would be dropped as if the spell had been
+     * removed from the loadout.
      */
     public void retainCooldownsFor(java.util.Set<ResourceLocation> stillPresent) {
-        readyAtTick.keySet().retainAll(stillPresent);
+        readyAtGameTime.keySet().retainAll(stillPresent);
+    }
+
+    /** Add without wrapping: a deliberately enormous cooldown must stay enormous, not go negative. */
+    private static long saturatingAdd(long a, long b) {
+        long sum = a + b;
+        return ((a ^ sum) & (b ^ sum)) < 0 ? Long.MAX_VALUE : sum;
     }
 
     // --- decision cadence ---------------------------------------------------------------------

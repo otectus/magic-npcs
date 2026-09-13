@@ -53,7 +53,15 @@ public interface CustomNpcsScriptApi {
         /** The target is this NPC's owner, faction friend, or otherwise an ally. */
         FRIENDLY_TARGET,
         /** Something threw. The message says what; the script gets a code, not a stack trace. */
-        INTERNAL_ERROR
+        INTERNAL_ERROR,
+        /**
+         * This NPC's own mod is at a build Magic NPCs is not pinned to, or its bridge is not running,
+         * so the NPC is deliberately left unmanaged and nothing was written to it.
+         *
+         * <p>Appended at the end on purpose: a script compares the numeric code, so inserting a value
+         * anywhere else would silently renumber every code after it.
+         */
+        UNSUPPORTED_NPC_BUILD
     }
 
     /**

@@ -141,6 +141,29 @@ public final class IronsBridge {
     }
 
     /**
+     * The one identity a spell has, whatever an author wrote.
+     *
+     * <p>{@link #getSpell} accepts more than one spelling of the same spell — a bare {@code devour}
+     * and {@code minecraft:devour} both resolve to {@code irons_spellbooks:devour}. Through 0.9.0 the
+     * rest of the mod then carried the author's spelling around: cooldowns were keyed by it, retained
+     * keys were compared against it and cast events published it. So the two spellings were two
+     * spells. A loadout listing both got two independent cooldowns for one spell, and a script that
+     * used the canonical id could fire a spell the AI had just put on cooldown (roadmap MN-005).
+     *
+     * @return {@code spell.getSpellResource()} for a resolvable id; the input unchanged for an
+     *         unknown one, so an unresolvable id stays visible in diagnostics as what was written
+     *         rather than silently becoming something else
+     */
+    public static ResourceLocation canonicalId(ResourceLocation id) {
+        if (id == null) {
+            return null;
+        }
+        AbstractSpell spell = getSpell(id);
+        ResourceLocation canonical = spell == null ? null : spell.getSpellResource();
+        return canonical == null ? id : canonical;
+    }
+
+    /**
      * Log a single clear warning that a loadout referenced a spell id that doesn't resolve to any
      * registered Iron's spell — naming the datapack file, entity type, the {@code spell} field, and
      * the bad id, with a hint to run {@code /magicnpcs spells}. Common cause: a missing

@@ -46,6 +46,10 @@ public record ReconcileResult(Outcome outcome, ReasonCode reason, String detail)
         NO_MANA_ATTRIBUTES("the mob has no Iron's mana attributes, so it cannot be given a mana pool"),
         NO_CASTABLE_SPELLS("every spell in the loadout was filtered out"),
         CLIENT_SIDE("reconciliation was attempted on the client"),
+        UNSUPPORTED_NPC_FRAMEWORK("this NPC's own mod is at a build Magic NPCs is not pinned to, "
+                + "so it is deliberately left unmanaged"),
+        NPC_FRAMEWORK_UNAVAILABLE("this NPC's own mod is installed but its bridge is not running"),
+        NPC_FRAMEWORK_DISABLED("the integration for this NPC's own mod is switched off"),
         UNCHANGED("the installed loadout already matches the catalog");
 
         private final String description;

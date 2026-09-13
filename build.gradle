@@ -37,6 +37,17 @@ minecraft {
         gameTestServer {
             args '--nogui'
             property 'forge.enabledGameTestNamespaces', 'magicnpcs'
+            // Honest positive profiles (roadmap MN-015). With no profile selected the integration
+            // tests skip when their host mod is absent, which is the right behaviour for the offline
+            // smoke run and the wrong behaviour for a run that claims an integration works. Naming a
+            // profile turns every test that needs one of its mods into a REQUIRED test that fails,
+            // with the reason, when the host is not actually there.
+            if (project.hasProperty('testRuntimeProfile') || project.hasProperty('positiveIntegration')) {
+                property 'magicnpcs.positiveProfile', selectedPositiveProfile()
+                property 'magicnpcs.requiredMods', selectedPositiveProfileMods().join(',')
+                property 'magicnpcs.gametestReport',
+                        project.file("${project.buildDir}/reports/gametest/positive-profile.properties").absolutePath
+            }
         }
 
         // Data generation (./gradlew runData): writes the shipped loadouts + item tags
@@ -203,7 +214,13 @@ jar {
                 "Implementation-Version" : "${project.version}+${gitDescribe()}",
                 "Implementation-Vendor"  : mod_authors,
                 "Implementation-Build-Date": new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone('UTC')),
-                "MagicNPCs-Irons-Verified": project.findProperty('irons_spellbooks_compile') ?: 'unknown'
+                // Two separate facts, deliberately two separate attributes. Neither is a behavioural
+                // pass: "Compiled-Against" is the artifact javac saw (checkArtifactProvenance proves
+                // the label matches the jar's own metadata), "Manifest-Reference" is the build the
+                // shipped spell classifications were read from. The old single "Irons-Verified"
+                // attribute conflated them and implied a verification that no build step performs.
+                "MagicNPCs-Irons-Compiled-Against": project.findProperty('irons_spellbooks_compile') ?: 'unknown',
+                "MagicNPCs-Irons-Manifest-Reference": project.findProperty('irons_spellbooks_manifest') ?: 'unknown'
         ])
     }
 }
@@ -241,6 +258,218 @@ tasks.register('checkVersionConsistency') {
 }
 
 check.dependsOn tasks.named('checkVersionConsistency')
+
+// -------------------------------------------------------------------------------------------------
+// Dependency provenance (roadmap MN-001).
+//
+// 0.9.0 shipped a manifest attribute claiming the mod had been compiled against Iron's 1.20.1-3.16.3.
+// The pinned CurseForge file id actually resolves to 1.20.1-3.15.0 - the label was written by hand and
+// nothing ever compared it to the artifact. A hand-maintained label that nothing checks is exactly the
+// class of fact that goes stale silently, so compare it against the jar's own metadata at build time.
+// -------------------------------------------------------------------------------------------------
+
+def sha256Of = { File f ->
+    java.security.MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString()
+}
+
+/**
+ * What a mod jar says about itself: the version in its own META-INF/mods.toml and the
+ * Implementation-Version in its own manifest. Both are written by the mod's build, not by us.
+ */
+def jarSelfDescription = { File jar ->
+    def described = [modsTomlVersion: null, implementationVersion: null, modId: null]
+    new java.util.zip.ZipFile(jar).withCloseable { zip ->
+        def toml = zip.getEntry('META-INF/mods.toml')
+        if (toml != null) {
+            def text = zip.getInputStream(toml).getText('UTF-8')
+            def id = (text =~ /(?m)^\s*modId\s*=\s*"([^"]+)"/)
+            if (id.find()) described.modId = id.group(1)
+            def version = (text =~ /(?m)^\s*version\s*=\s*"([^"]+)"/)
+            if (version.find()) described.modsTomlVersion = version.group(1)
+        }
+        def manifestEntry = zip.getEntry('META-INF/MANIFEST.MF')
+        if (manifestEntry != null) {
+            zip.getInputStream(manifestEntry).withCloseable { stream ->
+                described.implementationVersion =
+                        new java.util.jar.Manifest(stream).mainAttributes.getValue('Implementation-Version')
+            }
+        }
+    }
+    return described
+}
+
+/**
+ * The ORIGINAL published Iron's artifact, resolved without fg.deobf.
+ *
+ * What lands on compileClasspath is a remapped derivative: ForgeGradle rewrites it into the workspace
+ * mappings, so its bytes - and therefore its SHA-256 - are ours, not the publisher's. Provenance has to
+ * be established against the artifact as published; the derivative is recorded separately and never
+ * treated as the identity of the dependency.
+ */
+def originalIronsArtifact = { ->
+    def coordinate = "curse.maven:${irons_spellbooks_project}:${irons_spellbooks_file}"
+    def detached = configurations.detachedConfiguration(dependencies.create(coordinate))
+    detached.transitive = false
+    return detached.singleFile
+}
+
+def remappedIronsArtifact = { ->
+    return configurations.compileClasspath.files.find {
+        it.name.startsWith("${irons_spellbooks_project}-${irons_spellbooks_file}")
+    }
+}
+
+tasks.register('checkArtifactProvenance') {
+    group = 'verification'
+    description = "Verify that every declared dependency label matches the artifact's own metadata."
+    doLast {
+        def problems = []
+        def report = []
+
+        // --- Iron's: the declared compile label against the published jar's own metadata ------------
+        def declared = (project.findProperty('irons_spellbooks_compile') ?: 'unknown').toString()
+        def original = originalIronsArtifact()
+        def described = jarSelfDescription(original)
+        report << "Iron's Spells 'n Spellbooks"
+        report << "  coordinate           curse.maven:${irons_spellbooks_project}:${irons_spellbooks_file}"
+        report << "  original artifact    ${original.name}"
+        report << "  original sha256      ${sha256Of(original)}"
+        report << "  mods.toml modId      ${described.modId}"
+        report << "  mods.toml version    ${described.modsTomlVersion}"
+        report << "  manifest version     ${described.implementationVersion}"
+        report << "  declared compile     ${declared}"
+
+        def remapped = remappedIronsArtifact()
+        if (remapped != null) {
+            report << "  remapped derivative  ${remapped.name} (workspace mappings; not the published bytes)"
+            report << "  derivative sha256    ${sha256Of(remapped)}"
+        }
+
+        if (described.modsTomlVersion == null) {
+            problems << "The resolved Iron's artifact declares no version in its META-INF/mods.toml."
+        } else if (described.modsTomlVersion != declared) {
+            problems << "irons_spellbooks_compile says '${declared}', but file id ${irons_spellbooks_file} " +
+                    "resolves to an artifact whose own mods.toml says '${described.modsTomlVersion}'."
+        }
+        if (described.implementationVersion != null && described.implementationVersion != declared) {
+            problems << "irons_spellbooks_compile says '${declared}', but the resolved artifact's manifest " +
+                    "Implementation-Version is '${described.implementationVersion}'."
+        }
+        if (described.modId != null && described.modId != 'irons_spellbooks') {
+            problems << "The artifact behind file id ${irons_spellbooks_file} declares modId " +
+                    "'${described.modId}', not 'irons_spellbooks'."
+        }
+
+        // --- Runtime companion: only checkable when the dev-runtime jar is actually staged ----------
+        def runtimeIrons = file("libs/irons_spellbooks-${irons_spellbooks_runtime}.jar")
+        if (runtimeIrons.exists()) {
+            def runtimeDescribed = jarSelfDescription(runtimeIrons)
+            report << "  dev-runtime jar      ${runtimeIrons.name} (mods.toml ${runtimeDescribed.modsTomlVersion})"
+            report << "  dev-runtime sha256   ${sha256Of(runtimeIrons)}"
+            if (runtimeDescribed.modsTomlVersion != null
+                    && runtimeDescribed.modsTomlVersion != irons_spellbooks_runtime) {
+                problems << "irons_spellbooks_runtime says '${irons_spellbooks_runtime}', but " +
+                        "${runtimeIrons.name} declares '${runtimeDescribed.modsTomlVersion}'."
+            }
+        } else {
+            report << "  dev-runtime jar      not staged (-PdevRuntime unavailable; not an error here)"
+        }
+
+        // --- CustomNPCs: the pinned hash stays authoritative ----------------------------------------
+        report << "CustomNPCs (GBPort unofficial)"
+        if (customNpcsJar.exists()) {
+            def actual = sha256Of(customNpcsJar)
+            def describedNpcs = jarSelfDescription(customNpcsJar)
+            report << "  local artifact       ${customNpcsJar.name}"
+            report << "  sha256               ${actual}"
+            report << "  mods.toml version    ${describedNpcs.modsTomlVersion}"
+            report << "  pinned sha256        ${customnpcs_jar_sha256}"
+            if (actual != customnpcs_jar_sha256) {
+                problems << "The CustomNPCs jar in libs/ hashes to ${actual}, not the pinned " +
+                        "${customnpcs_jar_sha256}."
+            }
+        } else {
+            problems << "libs/${customNpcsJar.name} is missing; its pinned hash cannot be verified."
+        }
+
+        // --- Recruits ------------------------------------------------------------------------------
+        report << "Villager Recruits"
+        if (recruitsJar.exists()) {
+            report << "  local artifact       ${recruitsJar.name}"
+            report << "  sha256               ${sha256Of(recruitsJar)}"
+            report << "  mods.toml version    ${jarSelfDescription(recruitsJar).modsTomlVersion}"
+        } else {
+            problems << "libs/${recruitsJar.name} is missing; its provenance cannot be recorded."
+        }
+
+        // --- Nothing may become a bundled dependency -------------------------------------------------
+        // Every optional mod here is compileOnly or runtimeOnly on purpose (three of the four are All
+        // Rights Reserved). A stray 'implementation' would ship them inside our jar.
+        ['implementation', 'api'].each { name ->
+            def configuration = configurations.findByName(name)
+            if (configuration == null) {
+                return
+            }
+            configuration.dependencies.each { dependency ->
+                if (dependency.group == 'curse.maven' || dependency.group == 'blank'
+                        || dependency.group == 'maven.modrinth') {
+                    problems << "${dependency.group}:${dependency.name} is declared on '${name}', which " +
+                            "would bundle it into the mod jar. Optional mods stay compileOnly/runtimeOnly."
+                }
+            }
+        }
+
+        def reportFile = file("${buildDir}/reports/provenance/artifacts.txt")
+        reportFile.parentFile.mkdirs()
+        reportFile.text = report.join('\n') + '\n'
+        logger.lifecycle(report.join('\n'))
+        logger.lifecycle("Provenance report: ${reportFile}")
+
+        if (!problems.isEmpty()) {
+            throw new GradleException("Artifact provenance check failed:\n  - " + problems.join('\n  - '))
+        }
+        logger.lifecycle('Artifact provenance OK.')
+    }
+}
+
+check.dependsOn tasks.named('checkArtifactProvenance')
+
+/**
+ * The §1 baseline the roadmap asks a release to be reconstructable from: checkout identity, toolchain,
+ * resolved compile graph and the hash of every local jar. Written to a file rather than only logged so
+ * it can be attached to a release record.
+ */
+tasks.register('writeBuildBaselineReport') {
+    group = 'verification'
+    description = 'Record checkout, toolchain, resolved dependencies and local JAR hashes.'
+    doLast {
+        def lines = []
+        lines << "magicnpcs ${mod_version} build baseline"
+        lines << "generated             ${new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone('UTC'))}"
+        lines << "checkout              ${gitDescribe()}"
+        lines << "minecraft/forge       ${minecraft_version} / ${forge_version}"
+        lines << "java toolchain        ${java.toolchain.languageVersion.get()}"
+        lines << "gradle                ${gradle.gradleVersion}"
+        lines << ''
+        lines << 'compileClasspath (resolved)'
+        configurations.compileClasspath.resolvedConfiguration.resolvedArtifacts
+                .collect { "  ${it.moduleVersion.id} -> ${it.file.name}" }
+                .sort()
+                .each { lines << it }
+        lines << ''
+        lines << 'libs/'
+        def libs = file('libs').listFiles()?.findAll { it.name.endsWith('.jar') }?.sort { it.name } ?: []
+        if (libs.isEmpty()) {
+            lines << '  (none staged)'
+        }
+        libs.each { lines << "  ${it.name}  sha256=${sha256Of(it)}" }
+
+        def reportFile = file("${buildDir}/reports/provenance/baseline.txt")
+        reportFile.parentFile.mkdirs()
+        reportFile.text = lines.join('\n') + '\n'
+        logger.lifecycle("Build baseline: ${reportFile}")
+    }
+}
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
@@ -298,5 +527,165 @@ CustomNpcsCompat.SUPPORTED_VERSIONS, which is what decides at runtime whether th
 """.stripIndent())
             }
         }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Honest positive integration profiles (roadmap MN-P0.3, MN-P0.4 / MN-015).
+//
+// Through 0.9.0 every integration GameTest opened with "if the host mod is absent, succeed". That is
+// correct for the offline smoke run and actively misleading for a run that is meant to prove an
+// integration works: a completely green report was indistinguishable from a report where nothing ran.
+// The two are now separate things. No profile selected = absence smoke tests, unchanged. A selected
+// profile names the mods that MUST be present; its preflight fails before the server starts if they
+// are not, and every test needing one of them fails instead of skipping.
+// -------------------------------------------------------------------------------------------------
+
+/**
+ * Profile name -> the mod ids a run of that profile must actually load. Declared explicitly rather
+ * than derived from the -P runtime flags: a flag says what Gradle was asked to stage, and the point of
+ * a preflight is to check what is really there.
+ */
+def positiveProfileTable() {
+    return [
+            // The compile floor: Iron's alone, at the version the mod is compiled against.
+            'irons-floor'     : ['irons_spellbooks'],
+            // The full development stack (-PdevRuntime): Iron's + Recruits + Easy NPC + CustomNPCs.
+            'irons-dev'       : ['irons_spellbooks', 'recruits', 'easy_npc', 'customnpcs'],
+            // Iron's at the build the shipped spell manifest was classified against.
+            'irons-manifest'  : ['irons_spellbooks'],
+            'irons-easy'      : ['irons_spellbooks', 'easy_npc'],
+            'irons-customnpcs': ['irons_spellbooks', 'customnpcs'],
+            'irons-recruits'  : ['irons_spellbooks', 'recruits'],
+            // Everything at once, for the combined acceptance run.
+            'combined'        : ['irons_spellbooks', 'recruits', 'easy_npc', 'customnpcs'],
+    ]
+}
+
+/**
+ * @return the selected profile name. {@code -PpositiveIntegration=<name>} is accepted as an alias of
+ *         {@code -PtestRuntimeProfile=<name>} so the two documented spellings agree.
+ */
+def selectedPositiveProfile() {
+    def name = project.findProperty('testRuntimeProfile') ?: project.findProperty('positiveIntegration')
+    return name == null ? null : name.toString()
+}
+
+def selectedPositiveProfileMods() {
+    def name = selectedPositiveProfile()
+    def mods = positiveProfileTable()[name]
+    if (mods == null) {
+        throw new GradleException("Unknown positive integration profile '${name}'. Known profiles: "
+                + positiveProfileTable().keySet().join(', '))
+    }
+    return mods
+}
+
+/**
+ * Which local jar a required mod id is staged from, when it is staged from libs/ at all. Iron's and
+ * Easy NPC come from CurseMaven under -PdevRuntime, so their absence cannot be detected from the file
+ * system; the in-game preflight catches those.
+ */
+def requiredLocalJarFor(String modId) {
+    switch (modId) {
+        case 'recruits': return file("libs/recruits-${recruits_jar_version}.jar")
+        case 'customnpcs': return file("libs/${customnpcs_jar_artifact}-${customnpcs_jar_version}.jar")
+        case 'irons_spellbooks': return file("libs/irons_spellbooks-${irons_spellbooks_runtime}.jar")
+        default: return null
+    }
+}
+
+/**
+ * Everything checkable before the server boots: the profile name, the runtime flags that stage it, and
+ * the local jars it needs. The remaining half of the preflight - "did the mod actually load, and does
+ * the entity/API it needs exist" - can only be answered in-game and is answered by
+ * {@code com.otectus.magicnpcs.gametest.PositiveProfile}.
+ */
+tasks.register('checkPositiveGameTestPreflight') {
+    group = 'verification'
+    description = 'Fail before a positive integration run if its required dependencies are not staged.'
+    doLast {
+        def profile = selectedPositiveProfile()
+        if (profile == null) {
+            throw new GradleException("No positive profile selected. Pass -PtestRuntimeProfile=<name>; "
+                    + "known profiles: " + positiveProfileTable().keySet().join(', '))
+        }
+        def required = selectedPositiveProfileMods()
+        def problems = []
+
+        // A negative fixture for the preflight itself (REG-35): prove that a missing required jar
+        // fails the profile for that specific reason, without having to delete a real dependency.
+        if (project.findProperty('positivePreflightSelfTest') == 'missing-jar') {
+            problems << "required mod 'magicnpcs_test_absent' is staged from " +
+                    "libs/magicnpcs_test_absent-0.0.0.jar, which does not exist"
+        }
+
+        if (required.contains('irons_spellbooks') && !project.hasProperty('devRuntime')) {
+            problems << "profile '${profile}' requires Iron's at runtime, which only -PdevRuntime stages"
+        }
+        required.each { modId ->
+            def jar = requiredLocalJarFor(modId)
+            if (jar != null && !jar.exists()) {
+                problems << "required mod '${modId}' is staged from ${jar}, which does not exist"
+            }
+        }
+        if (!problems.isEmpty()) {
+            throw new GradleException("Positive profile '${profile}' cannot run:\n  - "
+                    + problems.join('\n  - ')
+                    + "\n\nThis is a preflight failure, not a test result: nothing ran. Stage the "
+                    + "dependencies (docs/dev-runtime.md) or select a different profile.")
+        }
+        logger.lifecycle("Positive profile '${profile}' preflight OK; required mods: ${required.join(', ')}")
+    }
+}
+
+/**
+ * Run the GameTests under a required-positive profile and reject a green result that did not actually
+ * exercise the positive path.
+ *
+ * <p>The in-game side writes executed/skipped/failed counts plus the name of every skipped positive
+ * test; this reads them back. A run in which every positive test skipped is a failure here, which is
+ * precisely the hole MN-015 recorded.
+ */
+tasks.register('verifyPositiveGameTests') {
+    group = 'verification'
+    description = 'Run the GameTests under a required-positive profile and verify the positive path ran.'
+    dependsOn tasks.named('checkPositiveGameTestPreflight')
+    dependsOn tasks.named('runGameTestServer')
+    doLast {
+        def profile = selectedPositiveProfile()
+        def reportFile = file("${buildDir}/reports/gametest/positive-profile.properties")
+        if (!reportFile.exists()) {
+            throw new GradleException("Positive profile '${profile}' produced no report at ${reportFile}. "
+                    + "The run did not reach the GameTest harness, so nothing is verified.")
+        }
+        def report = new Properties()
+        reportFile.withInputStream { report.load(it) }
+
+        def executed = (report.getProperty('executed') ?: '0') as int
+        def skipped = (report.getProperty('skipped') ?: '0') as int
+        def failed = (report.getProperty('failed') ?: '0') as int
+        def skippedPositive = report.getProperty('skippedPositive') ?: ''
+        logger.lifecycle("Positive profile '${profile}': executed=${executed} skipped=${skipped} "
+                + "failed=${failed}")
+
+        def problems = []
+        if (report.getProperty('profile') != profile) {
+            problems << "the report was written by profile '${report.getProperty('profile')}', not '${profile}'"
+        }
+        if (executed == 0) {
+            problems << 'no positive test executed at all'
+        }
+        if (failed > 0) {
+            problems << "${failed} test(s) failed: ${report.getProperty('failures') ?: 'see the run log'}"
+        }
+        if (!skippedPositive.isEmpty()) {
+            problems << "these tests skipped their positive path: ${skippedPositive}"
+        }
+        if (!problems.isEmpty()) {
+            throw new GradleException("Positive profile '${profile}' is not verified:\n  - "
+                    + problems.join('\n  - '))
+        }
+        logger.lifecycle("Positive profile '${profile}' verified: ${executed} executed, 0 skipped positive.")
     }
 }

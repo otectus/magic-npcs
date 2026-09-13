@@ -10,6 +10,7 @@ import com.otectus.magicnpcs.core.caster.CasterMovementGoal;
 import com.otectus.magicnpcs.core.caster.ManagedCasterState;
 import com.otectus.magicnpcs.core.caster.ReconcileReason;
 import com.otectus.magicnpcs.core.caster.ReconcileResult;
+import com.otectus.magicnpcs.core.diag.DiagnosticReport;
 import com.otectus.magicnpcs.core.loadout.LoadoutEntry;
 import com.otectus.magicnpcs.core.loadout.LoadoutManager;
 import com.otectus.magicnpcs.core.util.AttackGoals;
@@ -23,9 +24,11 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.animal.Wolf;
 import net.minecraft.world.entity.monster.AbstractSkeleton;
 import net.minecraft.world.entity.monster.Zombie;
@@ -38,6 +41,7 @@ import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -863,7 +867,7 @@ public final class IronsCastingTests {
         data.setMana(40.0f);
         ResourceLocation spellId = new ResourceLocation("irons_spellbooks", "magic_missile");
         ManagedCasterState state = ManagedCasterState.of(caster);
-        state.startCooldown(spellId, caster.tickCount + 200);
+        state.startCooldown(caster, spellId, 200);
 
         // Reconcile again for the same loadout: this must be a genuine no-op.
         ReconcileResult again = CasterReconciler.reconcile(caster, ReconcileReason.DATAPACK_RELOAD);
@@ -871,7 +875,7 @@ public final class IronsCastingTests {
                 "reconciling an unchanged loadout should be UNCHANGED, got " + again.describe());
         helper.assertTrue(MagicData.getPlayerMagicData(caster).getMana() < 45.0f,
                 "reconciliation refilled mana: " + MagicData.getPlayerMagicData(caster).getMana());
-        helper.assertTrue(ManagedCasterState.of(caster).cooldownRemaining(spellId, caster.tickCount) > 0,
+        helper.assertTrue(ManagedCasterState.of(caster).cooldownRemaining(spellId, caster) > 0,
                 "reconciliation cleared a running cooldown");
         helper.succeed();
     }
@@ -1158,7 +1162,7 @@ public final class IronsCastingTests {
                             "mana must be deducted once per cast, saw " + manaDrops[0] + " deductions");
                     ManagedCasterState state = ManagedCasterState.peek(caster);
                     helper.assertTrue(state != null
-                                    && state.cooldownRemaining(GRAVITY_FISSURE, caster.tickCount) > 0,
+                                    && state.cooldownRemaining(GRAVITY_FISSURE, caster) > 0,
                             "the cast must have started exactly one cooldown");
                 })
                 .thenSucceed();
@@ -1617,4 +1621,395 @@ public final class IronsCastingTests {
             MinecraftForge.EVENT_BUS.unregister(this);
         }
     }
+
+    // --- 0.9.1: request boundary and detached-driver reentrancy ---------------------------------
+
+    /**
+     * REG-05: a completion callback that asks for more casting must not corrupt the driver.
+     *
+     * <p>Completion is dispatched synchronously from inside {@code tickAll}'s iteration, and a script
+     * is entitled to answer it by casting again — on the same NPC or another one. Through 0.9.0 that
+     * reached {@code ACTIVE.add} while the list was being walked, which is a
+     * {@link java.util.ConcurrentModificationException} (roadmap MN-013). The driver is ticked from
+     * inside the test rather than waiting for the server tick precisely so a collection failure lands
+     * here, as a test failure, instead of in a server log nobody reads.
+     */
+    public static void callbackCreatedCastDoesNotCorruptTheDetachedDriver(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob first = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        Mob second = helper.spawn(EntityType.HUSK, new BlockPos(2, 2, 1));
+        first.setPersistenceRequired();
+        second.setPersistenceRequired();
+        primeMana(helper, first, 600.0);
+        primeMana(helper, second, 600.0);
+        Zombie target = pinnedTarget(helper);
+
+        ReentrantCaster reentrant = new ReentrantCaster(first, second, target);
+        MinecraftForge.EVENT_BUS.register(reentrant);
+        try {
+            helper.assertTrue(DetachedCastDriver.cast(first, target, MAGIC_MISSILE, 1).started(),
+                    "the first detached cast should have started");
+            try {
+                // Advancing here is what runs the terminal dispatch inside the driver's own iteration.
+                DetachedCastDriver.tickAll();
+            } catch (RuntimeException ex) {
+                helper.fail("a callback-created cast corrupted the driver: " + ex);
+                return;
+            }
+            helper.assertTrue(reentrant.terminals > 0,
+                    "an INSTANT cast must have terminated on its first advance");
+            helper.assertTrue(reentrant.sameCasterAccepted,
+                    "a callback must be able to start a replacement cast on the same caster");
+            helper.assertTrue(reentrant.otherCasterAccepted,
+                    "a callback must be able to start a cast on a different caster");
+            helper.assertTrue(reentrant.terminals == 1,
+                    "the replacement cast must not be advanced by the pass that created it, so only "
+                            + "one terminal can have been seen this tick; saw " + reentrant.terminals);
+            try {
+                DetachedCastDriver.tickAll(); // the staged sessions get their first advance now
+            } catch (RuntimeException ex) {
+                helper.fail("draining the staged additions corrupted the driver: " + ex);
+                return;
+            }
+        } finally {
+            MinecraftForge.EVENT_BUS.unregister(reentrant);
+        }
+        helper.succeed();
+    }
+
+    /**
+     * Casts again from inside a completion callback, once, on two different casters.
+     *
+     * <p>Once, because the replacement's own terminal would otherwise recurse without end — which is
+     * itself a thing the driver must survive, but is a different test from this one.
+     */
+    private static final class ReentrantCaster {
+        private final Mob same;
+        private final Mob other;
+        private final net.minecraft.world.entity.LivingEntity target;
+        private boolean fired;
+        boolean sameCasterAccepted;
+        boolean otherCasterAccepted;
+        int terminals;
+
+        ReentrantCaster(Mob same, Mob other, net.minecraft.world.entity.LivingEntity target) {
+            this.same = same;
+            this.other = other;
+            this.target = target;
+        }
+
+        @SubscribeEvent
+        public void onCompleted(MagicNpcCastEvent.Completed event) {
+            if (event.getCaster() != same) {
+                return;
+            }
+            terminals++;
+            if (fired) {
+                return;
+            }
+            fired = true;
+            // The cooldown the first cast started is real and would refuse the replacement for the
+            // right reason, which is not the reason this test is about.
+            ManagedCasterState.of(same).clearCooldown(MAGIC_MISSILE);
+            sameCasterAccepted = DetachedCastDriver.cast(same, target, MAGIC_MISSILE, 1).started();
+            otherCasterAccepted = DetachedCastDriver.cast(other, target, MAGIC_MISSILE, 1).started();
+        }
+    }
+
+    /**
+     * REG-03: competing requests for one caster produce at most one accepted session.
+     *
+     * <p>A second request arriving while the first is still channelling is refused, and refused
+     * <em>before</em> anything is spent: the caster pays once, for the cast that actually happened.
+     */
+    public static void competingRequestsProduceAtMostOneAcceptedSession(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 600.0);
+        Zombie target = pinnedTarget(helper);
+        CastLog log = new CastLog(caster);
+        try {
+            helper.assertTrue(DetachedCastDriver.cast(caster, target, GRAVITY_FISSURE, 1).started(),
+                    "the first request should have been accepted");
+            float afterFirst = MagicData.getPlayerMagicData(caster).getMana();
+
+            DetachedCastDriver.Result second = DetachedCastDriver.cast(caster, target, GRAVITY_FISSURE, 1);
+            helper.assertFalse(second.started(), "a second request must not start a second session");
+            helper.assertTrue(MagicData.getPlayerMagicData(caster).getMana() == afterFirst,
+                    "a refused request must cost the caster nothing");
+            helper.assertTrue(log.started.size() == 1,
+                    "exactly one Started may be announced for one accepted session, saw "
+                            + log.started.size());
+
+            // A different spell, while the caster is mid-channel, is refused for the same reason.
+            DetachedCastDriver.Result third = DetachedCastDriver.cast(caster, target, MAGIC_MISSILE, 1);
+            helper.assertFalse(third.started(),
+                    "a caster already channelling must not accept a second spell either");
+            helper.assertTrue(MagicData.getPlayerMagicData(caster).getMana() == afterFirst,
+                    "the third request must not have been charged either");
+        } finally {
+            log.close();
+        }
+        helper.succeed();
+    }
+
+    /**
+     * REG-01: an alias and its canonical spelling share one cooldown.
+     *
+     * <p>A bare {@code magic_missile} parses to the {@code minecraft} namespace and resolves to
+     * {@code irons_spellbooks:magic_missile}. Through 0.9.0 the cooldown was keyed by whichever form
+     * the caller used, so the same spell had two rests and could be fired twice in a row by spelling
+     * it two ways (roadmap MN-005).
+     */
+    public static void anAliasAndItsCanonicalFormShareOneCooldown(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.HUSK, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        primeMana(helper, caster, 600.0);
+        Zombie target = pinnedTarget(helper);
+        ResourceLocation bare = new ResourceLocation("minecraft", "magic_missile");
+
+        helper.assertTrue(IronsBridge.canonicalId(bare).equals(MAGIC_MISSILE),
+                "a bare id must canonicalise to the Iron's spell it resolves to, got "
+                        + IronsBridge.canonicalId(bare));
+        helper.assertTrue(DetachedCastDriver.cast(caster, target, MAGIC_MISSILE, 1).started(),
+                "the canonical request should have been accepted");
+        DetachedCastDriver.tickAll(); // INSTANT: the session ends here, leaving only the cooldown
+
+        DetachedCastDriver.Result viaAlias = DetachedCastDriver.cast(caster, target, bare, 1);
+        helper.assertFalse(viaAlias.started(),
+                "the alias must be refused by the cooldown the canonical cast started");
+        helper.assertTrue(viaAlias.refusal() == DetachedCastDriver.Refusal.ON_COOLDOWN,
+                "and refused for that reason specifically, got " + viaAlias.refusal()
+                        + " (" + viaAlias.detail() + ")");
+        helper.assertTrue(ManagedCasterState.of(caster).cooldownRemaining(bare, caster) > 0,
+                "the cooldown must be readable through either spelling");
+        helper.succeed();
+    }
+
+    // --- 0.9.0: foreign goal coexistence, repair and heartbeat stand-ins -------------------------
+
+    /**
+     * Stand-in for an MCreator-style native ranged goal from a mod we cannot compile against: it holds
+     * MOVE and LOOK, runs for as long as the mob has a target, and never yields. Its simple class name
+     * is on nobody's exact list, so the only handle Magic NPCs has on it is
+     * {@code general.attackGoalNamePatterns}.
+     */
+    private static final class SyntheticRangedAttackGoal extends Goal {
+        private final Mob mob;
+        private int ticks;
+
+        SyntheticRangedAttackGoal(Mob mob) {
+            this.mob = mob;
+            setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
+        }
+
+        @Override
+        public boolean canUse() {
+            return mob.getTarget() != null;
+        }
+
+        @Override
+        public boolean canContinueToUse() {
+            return canUse();
+        }
+
+        @Override
+        public void tick() {
+            LivingEntity target = mob.getTarget();
+            if (target != null) {
+                mob.getLookControl().setLookAt(target, 30.0F, 30.0F);
+            }
+            ticks++;
+        }
+
+        /** @return how many ticks this goal has actually run, so a test can prove it kept running. */
+        int ticks() {
+            return ticks;
+        }
+    }
+
+    /**
+     * The witch case with the priorities the other way round: the mob's own MOVE+LOOK goal sits at
+     * priority <b>0</b>, strictly better than the casting goal at 2, which is the arrangement
+     * {@code WrappedGoal.canBeReplacedBy} refuses to preempt. Under the default {@code coexist} the
+     * casting goal is flagless, so a flag conflict is the only thing that could block it and there is
+     * none — both must run.
+     */
+    public static void castingGoalStartsUnderStrictlyHigherPriorityLookGoal(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        double maxMana = primeMana(helper, caster, 300.0);
+        LoadoutEntry entry = new LoadoutEntry(
+                new ResourceLocation("irons_spellbooks", "magic_missile"),
+                1, 1, 0.0, 24.0, 1.0, LoadoutEntry.Role.ATTACK, 1.0, null, null, 0, null);
+        SpellcasterLoadout loadout = new SpellcasterLoadout(
+                EntityType.getKey(EntityType.SKELETON), 300.0, 0.0, List.of(entry));
+        caster.goalSelector.removeAllGoals(g -> true);
+        SyntheticRangedAttackGoal foreign = new SyntheticRangedAttackGoal(caster);
+        caster.goalSelector.addGoal(0, foreign);
+        caster.goalSelector.addGoal(2, new NpcSpellAttackGoal(caster, loadout));
+
+        Zombie target = pinnedTarget(helper);
+        int[] atFirstCast = new int[1];
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    caster.setTarget(target);
+                    helper.assertTrue(MagicData.getPlayerMagicData(caster).getMana() < maxMana - 0.5,
+                            "a casting goal at priority 2 must cast under a MOVE+LOOK goal at priority 0");
+                })
+                .thenExecute(() -> atFirstCast[0] = foreign.ticks())
+                .thenWaitUntil(() -> {
+                    caster.setTarget(target);
+                    helper.assertTrue(foreign.ticks() > atFirstCast[0],
+                            "the mob's own ranged goal must keep running after the first cast (coexist)");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * A goal class nobody has listed is still reachable through configuration alone: it matches by
+     * <em>pattern</em> (never {@code exact}), counts as running for the {@code yield} gate, and
+     * {@code suppress} takes it over and hands the very same object back at the very same priority.
+     */
+    public static void patternRecognisedForeignGoalHonoursSuppressAndYield(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob mob = helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        mob.setPersistenceRequired();
+        mob.goalSelector.removeAllGoals(g -> true);
+        SyntheticRangedAttackGoal foreign = new SyntheticRangedAttackGoal(mob);
+        mob.goalSelector.addGoal(1, foreign);
+
+        String reason = AttackGoals.matchedBy(foreign).orElse(null);
+        helper.assertTrue(reason != null && reason.startsWith("pattern:"),
+                "an unlisted MOVE+LOOK ranged goal must be matched by attackGoalNamePatterns, got " + reason);
+
+        Zombie target = pinnedTarget(helper);
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    mob.setTarget(target);
+                    helper.assertTrue(AttackGoals.anyNativeAttackRunning(mob),
+                            "the foreign goal must read as a running native attack while it has a target");
+                })
+                .thenExecute(() -> {
+                    List<String> suppressed = AttackGoals.suppressNativeAttackGoals(mob);
+                    helper.assertTrue(suppressed.contains(foreign.getClass().getSimpleName()),
+                            "suppression should have taken over the foreign goal, took " + suppressed);
+                    helper.assertFalse(AttackGoals.anyNativeAttackRunning(mob),
+                            "nothing native may be running while the lease is held");
+                    helper.assertTrue(AttackGoals.hasSuppressedGoals(mob), "the lease should be visible");
+
+                    AttackGoals.releaseNativeAttackGoals(mob);
+                    helper.assertTrue(priorityOf(mob, foreign) == 1,
+                            "releasing must restore the same goal object at priority 1, found at "
+                                    + priorityOf(mob, foreign));
+                    helper.assertFalse(AttackGoals.hasSuppressedGoals(mob), "no lease should remain");
+                })
+                .thenSucceed();
+    }
+
+    /** @return the priority {@code goal} is registered at on {@code mob}, or -1 if it is not there. */
+    private static int priorityOf(Mob mob, Goal goal) {
+        for (net.minecraft.world.entity.ai.goal.WrappedGoal wrapped : mob.goalSelector.getAvailableGoals()) {
+            if (wrapped.getGoal() == goal) {
+                return wrapped.getPriority();
+            }
+        }
+        return -1;
+    }
+
+    /** @return how many casting goals of ours are installed on {@code mob}. */
+    private static int countSpellGoals(Mob mob) {
+        int n = 0;
+        for (net.minecraft.world.entity.ai.goal.WrappedGoal wrapped : mob.goalSelector.getAvailableGoals()) {
+            if (CasterReconciler.isOurSpellGoal(wrapped.getGoal())) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * A framework that rebuilds a mob's goal selector wipes everything Magic NPCs injected. The
+     * detection seam ({@link CasterReconciler#ownedGoalsIntact}) must notice, and a queued reconcile
+     * must be enough to put the caster back — one casting goal, casting again, no second copy.
+     */
+    public static void goalWipeIsDetectedAndRepairedThroughReconcile(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob caster = (Mob) helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        caster.setPersistenceRequired();
+        CasterReconciler.removeSpellGoals(caster);
+        ManagedCasterState.forget(caster);
+        LoadoutManager.publishForTest(java.util.Map.of(EntityType.getKey(EntityType.SKELETON),
+                List.of(testLoadout(EntityType.SKELETON, 200.0))));
+        CasterReconciler.reconcile(caster, ReconcileReason.DATAPACK_RELOAD);
+        helper.assertTrue(CasterReconciler.ownedGoalsIntact(caster),
+                "test setup: a freshly reconciled caster should own an intact goal set");
+        double maxMana = primeMana(helper, caster, 200.0);
+
+        caster.goalSelector.removeAllGoals(g -> true);
+        helper.assertFalse(CasterReconciler.ownedGoalsIntact(caster),
+                "a wiped goal selector must be reported as no longer intact");
+
+        IronsSpellcasterHandler.requestReconcile(caster, ReconcileReason.ADMIN_COMMAND);
+        Zombie target = pinnedTarget(helper);
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    helper.assertTrue(CasterReconciler.ownedGoalsIntact(caster),
+                            "the queued reconcile must reinstall what the wipe removed");
+                    helper.assertTrue(countSpellGoals(caster) == 1,
+                            "repair must leave exactly one casting goal, found " + countSpellGoals(caster));
+                })
+                .thenWaitUntil(() -> {
+                    caster.setTarget(target);
+                    helper.assertTrue(MagicData.getPlayerMagicData(caster).getMana() < maxMana - 0.5,
+                            "a repaired caster must actually cast again");
+                })
+                .thenSucceed();
+    }
+
+    /** The token {@code /magicnpcs why} prints when the casting goal is never evaluated. */
+    private static final String GOAL_NOT_EVALUATED = "[GOAL_NOT_EVALUATED]";
+
+    /**
+     * The diagnostic that tells an operator "this mob's AI never runs the goal selector" apart from
+     * "the goal runs and is blocked". A caster with {@code setNoAi(true)} is never evaluated, so after
+     * more than {@link CasterDiagnostics#GOAL_STALE_TICKS} ticks {@code why} must say so; an otherwise
+     * identical caster with its AI on must report a fresh heartbeat and no such blocker.
+     */
+    public static void whyReportsStaleHeartbeatWhenGoalIsNeverEvaluated(GameTestHelper helper) {
+        helper.getLevel().getServer().setDifficulty(Difficulty.NORMAL, true);
+        Mob stalled = helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 1));
+        Mob healthy = helper.spawn(EntityType.SKELETON, new BlockPos(1, 2, 3));
+        for (Mob mob : List.of(stalled, healthy)) {
+            mob.setPersistenceRequired();
+            mob.goalSelector.removeAllGoals(g -> true);
+            primeMana(helper, mob, 200.0);
+            mob.goalSelector.addGoal(2,
+                    new NpcSpellAttackGoal(mob, testLoadout(EntityType.SKELETON, 200.0)));
+        }
+        stalled.setNoAi(true);
+
+        helper.startSequence()
+                .thenIdle(CasterDiagnostics.GOAL_STALE_TICKS + 10)
+                .thenExecute(() -> {
+                    helper.assertTrue(reportContains(CasterDiagnostics.describe(stalled), GOAL_NOT_EVALUATED),
+                            "why must report the stale-heartbeat blocker for a caster whose AI is off");
+                    helper.assertFalse(reportContains(CasterDiagnostics.describe(healthy), GOAL_NOT_EVALUATED),
+                            "a caster whose goal selector runs must not report a stale heartbeat");
+                    int age = ManagedCasterState.of(healthy).goalHeartbeatAge(healthy.tickCount);
+                    helper.assertTrue(age <= 2,
+                            "a running goal selector should keep the heartbeat fresh, age was " + age);
+                })
+                .thenSucceed();
+    }
+
+    /** @return true if any line of {@code report} contains {@code needle}. */
+    private static boolean reportContains(DiagnosticReport report, String needle) {
+        return report.lines().stream().anyMatch(line -> line.text().contains(needle));
+    }
+
 }

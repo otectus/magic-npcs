@@ -189,6 +189,46 @@ class LoadoutParseTest {
     }
 
     @Test
+    void anInvalidCooldownMultiplierIsRejectedRatherThanClamped() {
+        // REG-23, parser half. Math.max(0.0, NaN) is NaN, so the old clamp let a non-numeric
+        // multiplier straight through into the cooldown arithmetic, where — combined with the
+        // narrowing overflow — it could produce the SHORTEST cooldown the config allows (MN-017).
+        IllegalArgumentException negative = assertThrows(IllegalArgumentException.class, () -> parse("""
+                { "entity_type": "minecraft:skeleton", "spells": [
+                    { "spell": "irons_spellbooks:magic_missile", "cooldown_multiplier": -2.0 },
+                    { "spell": "irons_spellbooks:fireball" } ] }"""));
+        assertTrue(negative.getMessage().contains("cooldown_multiplier"));
+
+        assertThrows(IllegalArgumentException.class, () -> parse("""
+                { "entity_type": "minecraft:skeleton", "spells": [
+                    { "spell": "irons_spellbooks:magic_missile", "cooldown_multiplier": "slow" },
+                    { "spell": "irons_spellbooks:fireball" } ] }"""));
+    }
+
+    @Test
+    void anAbsurdCooldownMultiplierIsWarnedAboutButAccepted() {
+        // "Effectively never" is a legitimate authoring choice, so it parses. It is reported because
+        // the far likelier explanation is that the author read the multiplier as a rate.
+        LoadoutRecord record = parse("""
+                { "entity_type": "minecraft:skeleton", "spells": [
+                    { "spell": "irons_spellbooks:magic_missile",
+                      "cooldown_multiplier": 100000.0 } ] }""", RECRUITS_ABSENT);
+        assertEquals(1, withCode(record, "COOLDOWN_MULTIPLIER_SUSPICIOUS").size(),
+                "an absurd multiplier should be reported exactly once");
+        assertTrue(record.status() != LoadoutRecord.Status.REJECTED,
+                "a warning must not reject the file");
+    }
+
+    @Test
+    void anOrdinaryCooldownMultiplierIsAcceptedSilently() {
+        // Positive control for the two tests above: the normal range is untouched.
+        SpellcasterLoadout loadout = parse("""
+                { "entity_type": "minecraft:skeleton", "spells": [
+                    { "spell": "irons_spellbooks:magic_missile", "cooldown_multiplier": 2.0 } ] }""");
+        assertEquals(2.0, loadout.spells().get(0).cooldownMultiplier());
+    }
+
+    @Test
     void aSupportConditionWithNoHealthTermHasNoSelfHealthGate() {
         // ADR 0005 anti-loop floor: only a condition that constrains the caster's own condition may
         // stand in for the "when hurt" gate out of combat.

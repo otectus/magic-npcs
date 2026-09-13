@@ -16,6 +16,7 @@ import com.otectus.magicnpcs.core.caster.ReconcileReason;
 import com.otectus.magicnpcs.integration.irons.IronsIntegration;
 import com.otectus.magicnpcs.registry.MagicNpcsItems;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.server.ServerStartedEvent;
 import net.minecraftforge.event.server.ServerStoppedEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -173,19 +174,42 @@ public class MagicNpcs {
                 .orElse("absent");
     }
 
-    /** Drop every managed caster's in-memory state when the server stops, so a restart starts clean. */
+    /**
+     * Release the detached driver's teardown guard for the world that is starting.
+     *
+     * <p>The guard is what stops a shutdown callback registering a cast into a dying world. It has to
+     * be per server lifetime rather than per JVM: an integrated client stops and starts a server every
+     * time a player leaves one world and opens another, and a latched guard would leave the second
+     * world without detached casting for no reason a player could see.
+     */
+    @SubscribeEvent
+    public void onServerStarted(ServerStartedEvent event) {
+        if (IronsCompat.isLoaded()) {
+            com.otectus.magicnpcs.integration.irons.DetachedCastDriver.armForNewServer();
+        }
+    }
+
+    /**
+     * Drop every managed caster's in-memory state when the server stops, so a restart starts clean.
+     *
+     * <p><b>Order matters.</b> Live sessions are terminated first, and only then is the bookkeeping
+     * they announce through cleared. 0.9.0 did it the other way round: {@code MagicNpcEvents.clear()}
+     * ran before {@code DetachedCastDriver.clearAll()}, so every session cancelled during teardown
+     * found its open-cast record already gone and its terminal event was dropped. A listener that had
+     * heard a Started for those casts never heard an ending (roadmap MN-013).
+     */
     @SubscribeEvent
     public void onServerStopped(ServerStoppedEvent event) {
-        ManagedCasterState.clearAll();
-        // Open-cast bookkeeping is keyed by entity UUID; a stale one from this world must not decide
-        // whether a cast in the next one may announce its ending.
-        com.otectus.magicnpcs.core.caster.MagicNpcEvents.clear();
         if (IronsCompat.isLoaded()) {
             com.otectus.magicnpcs.integration.irons.DetachedCastDriver.clearAll();
             // An audit that outlives the server would leave its two persistent dummies saved in the
             // world it was auditing; cancelling writes the rows it already has and discards them.
             com.otectus.magicnpcs.integration.irons.SpellAuditRun.cancelActive();
         }
+        ManagedCasterState.clearAll();
+        // Open-cast bookkeeping is keyed by entity UUID; a stale one from this world must not decide
+        // whether a cast in the next one may announce its ending.
+        com.otectus.magicnpcs.core.caster.MagicNpcEvents.clear();
         if (EasyNpcCompat.isLoaded()) {
             EasyNpcIntegration.shutdown();
         }

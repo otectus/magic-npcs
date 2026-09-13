@@ -4,16 +4,16 @@ import com.otectus.magicnpcs.api.event.MagicNpcSchoolChangedEvent;
 import com.otectus.magicnpcs.config.MagicNpcsConfig;
 import com.otectus.magicnpcs.core.SchoolAssignResult;
 import com.otectus.magicnpcs.core.SchoolData;
-import com.otectus.magicnpcs.core.caster.ManagedCasterState;
 import com.otectus.magicnpcs.core.diag.DiagnosticReport;
 import com.otectus.magicnpcs.core.loadout.LoadoutManager;
 import com.otectus.magicnpcs.core.loadout.LoadoutResolution;
+import com.otectus.magicnpcs.integration.irons.CastRequest;
+import com.otectus.magicnpcs.integration.irons.CastRequestValidator;
 import com.otectus.magicnpcs.integration.irons.CasterDiagnostics;
 import com.otectus.magicnpcs.integration.irons.DetachedCastDriver;
 import com.otectus.magicnpcs.integration.irons.IronsBridge;
 import com.otectus.magicnpcs.integration.irons.IronsSpellcasterHandler;
 import io.redspace.ironsspellbooks.api.registry.AttributeRegistry;
-import io.redspace.ironsspellbooks.api.spells.AbstractSpell;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
@@ -101,21 +101,17 @@ public final class CustomNpcsScriptApiIrons implements CustomNpcsScriptApi {
             if (spellId == null) {
                 return Result.no(ResultCode.INVALID_ARGUMENT, "'" + spell + "' is not a spell id");
             }
-            AbstractSpell resolved = IronsBridge.getSpell(spellId);
-            if (resolved == null || !IronsBridge.isAllowedSpell(resolved)) {
-                return Result.no(ResultCode.SPELL_NOT_ALLOWED, spellId
-                        + " is unknown, blacklisted, or not castable by a mob in this build");
+            // Asked through the same validator the cast path uses, so "can this NPC cast?" and
+            // "may this NPC cast?" cannot give different answers. It writes nothing — no prepared
+            // spell, no managed state, no event, no RNG — which is what makes it safe to call from a
+            // script's own condition check (roadmap MN-003).
+            CastRequest request = CastRequest.of(mob, null, spellId, level,
+                    com.otectus.magicnpcs.api.event.MagicNpcCastEvent.CastSource.SCRIPT);
+            CastRequestValidator.Verdict verdict = CastRequestValidator.validate(request);
+            if (verdict.ok()) {
+                return Result.ok(true);
             }
-            ManagedCasterState state = ManagedCasterState.peek(mob);
-            if (state != null && state.cooldownRemaining(spellId, mob.tickCount) > 0) {
-                return Result.no(ResultCode.ON_COOLDOWN, spellId + " is on cooldown for another "
-                        + state.cooldownRemaining(spellId, mob.tickCount) + " ticks");
-            }
-            if (!IronsBridge.canAfford(mob, resolved, level)) {
-                return Result.no(ResultCode.NO_MANA, spellId + " at level " + level
-                        + " costs more mana than this NPC has");
-            }
-            return Result.ok(true);
+            return Result.no(scriptCode(verdict.problem()), verdict.describe());
         });
     }
 
@@ -147,6 +143,8 @@ public final class CustomNpcsScriptApiIrons implements CustomNpcsScriptApi {
             ResultCode code = switch (outcome) {
                 case UNKNOWN_SCHOOL, SCHOOL_NOT_ALLOWED, SCHOOLS_DISABLED -> ResultCode.SCHOOL_NOT_ALLOWED;
                 case NO_CASTABLE_SPELLS -> ResultCode.SPELL_NOT_ALLOWED;
+                case UNSUPPORTED_NPC_FRAMEWORK, NPC_FRAMEWORK_UNAVAILABLE, NPC_FRAMEWORK_DISABLED ->
+                        ResultCode.UNSUPPORTED_NPC_BUILD;
                 case OK -> ResultCode.OK;
             };
             return Result.no(code, outcome.describe(schoolId));
@@ -156,6 +154,12 @@ public final class CustomNpcsScriptApiIrons implements CustomNpcsScriptApi {
     @Override
     public Result clearSchool(Mob mob) {
         return mutate(mob, () -> {
+            SchoolAssignResult refusal = IronsSpellcasterHandler.frameworkRefusal(mob);
+            if (refusal != null) {
+                // Reported rather than swallowed: the handler declines the write either way, and a
+                // script told "ok" for a change that did not happen would go on to rely on it.
+                return Result.no(ResultCode.UNSUPPORTED_NPC_BUILD, refusal.describe(null));
+            }
             IronsSpellcasterHandler.clearSchool(mob, SOURCE);
             return Result.ok(true);
         });
@@ -164,6 +168,10 @@ public final class CustomNpcsScriptApiIrons implements CustomNpcsScriptApi {
     @Override
     public Result returnToAuto(Mob mob) {
         return mutate(mob, () -> {
+            SchoolAssignResult refusal = IronsSpellcasterHandler.frameworkRefusal(mob);
+            if (refusal != null) {
+                return Result.no(ResultCode.UNSUPPORTED_NPC_BUILD, refusal.describe(null));
+            }
             IronsSpellcasterHandler.resetSchoolToAuto(mob, SOURCE);
             return Result.ok(true);
         });
@@ -206,6 +214,8 @@ public final class CustomNpcsScriptApiIrons implements CustomNpcsScriptApi {
                 code = ResultCode.NOT_CASTER;
             } else if (outcome.refusal() == DetachedCastDriver.Refusal.ON_COOLDOWN) {
                 code = ResultCode.ON_COOLDOWN;
+            } else if (outcome.refusal() == DetachedCastDriver.Refusal.SHUTTING_DOWN) {
+                code = ResultCode.NOT_SERVER;
             } else {
                 code = ResultCode.SPELL_NOT_ALLOWED;
             }
@@ -245,6 +255,28 @@ public final class CustomNpcsScriptApiIrons implements CustomNpcsScriptApi {
                             + "(customnpcs.scriptMutationsEnabled = false)");
         }
         return read(mob, body);
+    }
+
+    /**
+     * Map a validator refusal onto the script-facing code closest to it.
+     *
+     * <p>Kept as an explicit table rather than a default, so adding a refusal reason is a decision
+     * about what scripts are told rather than a silent reclassification as "spell not allowed".
+     */
+    private static ResultCode scriptCode(CastRequestValidator.Problem problem) {
+        return switch (problem) {
+            case NONE -> ResultCode.OK;
+            case SPELL_UNKNOWN, SPELL_BLACKLISTED, NOT_CASTABLE_BY_MOB -> ResultCode.SPELL_NOT_ALLOWED;
+            case NOT_SERVER_SIDE -> ResultCode.NOT_SERVER;
+            case CASTER_UNAVAILABLE -> ResultCode.ENTITY_GONE;
+            case FRAMEWORK_UNSUPPORTED, FRAMEWORK_UNAVAILABLE, FRAMEWORK_DISABLED ->
+                    ResultCode.UNSUPPORTED_NPC_BUILD;
+            case CASTER_BUSY, ACTIVITY_REFUSED -> ResultCode.NOT_CASTER;
+            case NEEDS_TARGET, TARGET_INVALID, TARGET_IS_CASTER, TARGET_NOT_VISIBLE -> ResultCode.NO_TARGET;
+            case TARGET_PROTECTED -> ResultCode.FRIENDLY_TARGET;
+            case ON_COOLDOWN -> ResultCode.ON_COOLDOWN;
+            case INSUFFICIENT_MANA -> ResultCode.NO_MANA;
+        };
     }
 
     /** @return the id, or {@code null} for anything a script could plausibly have typed by mistake. */

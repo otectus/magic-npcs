@@ -14,6 +14,7 @@ import com.otectus.magicnpcs.core.SchoolData;
 import com.otectus.magicnpcs.core.adapter.NpcAdapters;
 import com.otectus.magicnpcs.core.caster.ManagedCasterState;
 import com.otectus.magicnpcs.core.caster.ReconcileReason;
+import com.otectus.magicnpcs.gametest.PositiveProfile;
 import com.otectus.magicnpcs.integration.irons.CasterReconciler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
@@ -41,10 +42,12 @@ import java.util.Map;
  * bridge exists for: an authored NPC having its AI rebuilt, which clears both goal selectors and takes
  * Magic NPCs' casting goals with them. Nothing short of the real mod reproduces that.
  *
- * <p>Every test is gated on the mods it needs and succeeds immediately when they are absent, so the
- * offline {@code runGameTestServer} used for the boot check stays green. They are {@code
- * required = false} for the same reason the Iron's runtime tests are: a scenario needing three mods
- * staged by hand should not be able to fail the suite for someone who has staged none of them.
+ * <p>Every test is gated through {@link PositiveProfile} on the mods it needs. With no profile
+ * selected it succeeds immediately when they are absent, so the offline {@code runGameTestServer} used
+ * for the boot check stays green; they are {@code required = false} for the same reason the Iron's
+ * runtime tests are. Under {@code -PtestRuntimeProfile=irons-customnpcs} the same tests are binding:
+ * an absent host, an unregistered NPC entity type and a refused expected-positive cast each fail,
+ * naming the reason, instead of reporting a green run in which nothing was exercised (MN-015).
  */
 @GameTestHolder(MagicNpcs.MODID)
 @PrefixGameTestTemplate(false)
@@ -66,17 +69,35 @@ public final class CustomNpcsCompatGameTests {
      */
     @GameTest(template = "platform", timeoutTicks = 260, required = false)
     public static void casterGoalSurvivesAiRebuild(GameTestHelper helper) {
-        if (!IronsCompat.isLoaded() || !CustomNpcsCompat.isLoaded()) {
-            helper.succeed();
+        if (!PositiveProfile.require(helper, IronsCompat.MODID, "casterGoalSurvivesAiRebuild")) {
             return;
         }
-        Mob npc = spawnNpc(helper);
+        if (!PositiveProfile.require(helper, CustomNpcsCompat.MODID, "casterGoalSurvivesAiRebuild")) {
+            return;
+        }
+        Mob npc = spawnNpc(helper, "casterGoalSurvivesAiRebuild");
         if (npc == null) {
             helper.succeed();
             return;
         }
         SchoolData.set(npc, SCHOOL, true);
         CasterReconciler.reconcile(npc, ReconcileReason.TEST);
+        assertExactlyOneSpellGoal(helper, npc);
+        // A repaired goal that cannot cast is not a repaired caster. Observe an accepted cast BEFORE
+        // the rebuild so the same observation after it means something: 0.9.0 counted casting goals
+        // only, which a goal that had lost its loadout would also satisfy (MN-015).
+        int foreignGoalsBefore = foreignGoalCount(npc);
+        boolean acceptedBefore = castAcceptedSpendingMana(helper, npc);
+        if (!acceptedBefore) {
+            if (PositiveProfile.requiredMods().contains(CustomNpcsCompat.MODID)) {
+                PositiveProfile.missingHostCapability(helper, "casterGoalSurvivesAiRebuild",
+                        "the NPC could not cast before the AI rebuild, so a cast after it proves "
+                                + "nothing about the repair");
+                return;
+            }
+            helper.succeed();
+            return;
+        }
 
         // Changing an AI mode is how an author triggers a rebuild, and it is the same code path
         // CustomNPCs runs on its own cadence.
@@ -92,17 +113,57 @@ public final class CustomNpcsCompatGameTests {
         for (int tick = 40; tick <= 200; tick += 10) {
             helper.runAtTickTime(tick, () -> assertExactlyOneSpellGoal(helper, npc));
         }
-        helper.runAtTickTime(200, helper::succeed);
+        helper.runAtTickTime(200, () -> {
+            assertExactlyOneSpellGoal(helper, npc);
+            // The rebuild must not have cost the NPC goals that were never ours to touch.
+            helper.assertTrue(foreignGoalCount(npc) == foreignGoalsBefore,
+                    "the repair must leave foreign goals alone: " + foreignGoalsBefore + " before, "
+                            + foreignGoalCount(npc) + " after");
+            // Cooldowns are deliberately preserved across a rebuild, so clear this spell's before
+            // asking for the same observation again — otherwise a refusal would only mean "resting".
+            ManagedCasterState.of(npc).clearCooldown(SPELL);
+            helper.assertTrue(castAcceptedSpendingMana(helper, npc),
+                    "after the AI rebuild the repaired caster must still accept a cast and spend "
+                            + "mana on it, not merely own a goal");
+            helper.succeed();
+        });
+    }
+
+    /**
+     * Ask the NPC to cast through the script bridge and report whether it was accepted <em>and</em>
+     * paid for. Mana is the cheapest observation of an effect that actually began: Iron's charges it at
+     * the moment it accepts the cast, and a refusal never reaches that point.
+     */
+    private static boolean castAcceptedSpendingMana(GameTestHelper helper, Mob npc) {
+        double before = manaOf(npc);
+        CustomNpcsScriptApi.Result result = CustomNpcsScriptBridge.api().cast(npc, SPELL.toString(), 1, null);
+        if (!result.isOk()) {
+            return false;
+        }
+        double after = manaOf(npc);
+        helper.assertTrue(after < before,
+                "an accepted cast must spend mana (" + before + " -> " + after + ")");
+        return true;
+    }
+
+    /** @return how many goals on this NPC are not ours, so a repair pass can be shown to leave them be. */
+    private static int foreignGoalCount(Mob mob) {
+        int found = 0;
+        for (WrappedGoal wrapped : mob.goalSelector.getAvailableGoals()) {
+            if (!CasterReconciler.isOurSpellGoal(wrapped.getGoal())) {
+                found++;
+            }
+        }
+        return found;
     }
 
     /** An NPC that dies stops being tracked, so the activity table cannot outlive the world. */
     @GameTest(template = "platform", timeoutTicks = 100, required = false)
     public static void deathClearsActivityState(GameTestHelper helper) {
-        if (!CustomNpcsCompat.isLoaded()) {
-            helper.succeed();
+        if (!PositiveProfile.require(helper, CustomNpcsCompat.MODID, "deathClearsActivityState")) {
             return;
         }
-        Mob npc = spawnNpc(helper);
+        Mob npc = spawnNpc(helper, "deathClearsActivityState");
         if (npc == null) {
             helper.succeed();
             return;
@@ -121,11 +182,10 @@ public final class CustomNpcsCompatGameTests {
     /** Leaving the level (unload, dimension change) clears the same state as death does. */
     @GameTest(template = "platform", timeoutTicks = 100, required = false)
     public static void leaveClearsActivityState(GameTestHelper helper) {
-        if (!CustomNpcsCompat.isLoaded()) {
-            helper.succeed();
+        if (!PositiveProfile.require(helper, CustomNpcsCompat.MODID, "leaveClearsActivityState")) {
             return;
         }
-        Mob npc = spawnNpc(helper);
+        Mob npc = spawnNpc(helper, "leaveClearsActivityState");
         if (npc == null) {
             helper.succeed();
             return;
@@ -139,14 +199,30 @@ public final class CustomNpcsCompatGameTests {
         });
     }
 
-    /** @return a spawned CustomNPC, or {@code null} if the entity type is not registered after all. */
-    private static Mob spawnNpc(GameTestHelper helper) {
+    /**
+     * @return a spawned CustomNPC, or {@code null} if the entity type is not registered after all.
+     *
+     *         <p>Under a required-positive profile that is no longer a shrug. CustomNPCs is loaded —
+     *         {@link PositiveProfile#require} has already said so — so an unregistered
+     *         {@code customnpcs:customnpc} or an entity that is not a {@code Mob} is a real finding
+     *         about the host build, and the test fails naming it rather than succeeding with nothing
+     *         exercised (MN-015). Offline it still returns null and the caller still skips.
+     */
+    private static Mob spawnNpc(GameTestHelper helper, String testName) {
         EntityType<?> type = ForgeRegistries.ENTITY_TYPES.getValue(CUSTOM_NPC);
         if (type == null) {
+            if (PositiveProfile.requiredMods().contains(CustomNpcsCompat.MODID)) {
+                PositiveProfile.missingHostCapability(helper, testName,
+                        "CustomNPCs is loaded but " + CUSTOM_NPC + " is not a registered entity type");
+            }
             return null;
         }
         Entity entity = helper.spawn(type, new BlockPos(1, 2, 1));
         if (!(entity instanceof Mob mob)) {
+            if (PositiveProfile.requiredMods().contains(CustomNpcsCompat.MODID)) {
+                PositiveProfile.missingHostCapability(helper, testName,
+                        CUSTOM_NPC + " spawned as " + entity + ", which is not a Mob");
+            }
             return null;
         }
         mob.setPersistenceRequired();
@@ -236,11 +312,13 @@ public final class CustomNpcsCompatGameTests {
      */
     @GameTest(template = "platform", timeoutTicks = 120, required = false)
     public static void aVetoedCastCostsTheCasterNothing(GameTestHelper helper) {
-        if (!IronsCompat.isLoaded() || !CustomNpcsCompat.isLoaded()) {
-            helper.succeed();
+        if (!PositiveProfile.require(helper, IronsCompat.MODID, "aVetoedCastCostsTheCasterNothing")) {
             return;
         }
-        Mob npc = spawnNpc(helper);
+        if (!PositiveProfile.require(helper, CustomNpcsCompat.MODID, "aVetoedCastCostsTheCasterNothing")) {
+            return;
+        }
+        Mob npc = spawnNpc(helper, "aVetoedCastCostsTheCasterNothing");
         if (npc == null) {
             helper.succeed();
             return;
@@ -278,11 +356,13 @@ public final class CustomNpcsCompatGameTests {
      */
     @GameTest(template = "platform", timeoutTicks = 200, required = false)
     public static void anAcceptedCastAnnouncesOneStartAndOneEnding(GameTestHelper helper) {
-        if (!IronsCompat.isLoaded() || !CustomNpcsCompat.isLoaded()) {
-            helper.succeed();
+        if (!PositiveProfile.require(helper, IronsCompat.MODID, "anAcceptedCastAnnouncesOneStartAndOneEnding")) {
             return;
         }
-        Mob npc = spawnNpc(helper);
+        if (!PositiveProfile.require(helper, CustomNpcsCompat.MODID, "anAcceptedCastAnnouncesOneStartAndOneEnding")) {
+            return;
+        }
+        Mob npc = spawnNpc(helper, "anAcceptedCastAnnouncesOneStartAndOneEnding");
         if (npc == null) {
             helper.succeed();
             return;
@@ -292,19 +372,37 @@ public final class CustomNpcsCompatGameTests {
 
         CastWatch watch = new CastWatch(npc, false);
         MinecraftForge.EVENT_BUS.register(watch);
+        double manaBefore = manaOf(npc);
         CustomNpcsScriptApi.Result result =
                 CustomNpcsScriptBridge.api().cast(npc, SPELL.toString(), 1, null);
         if (!result.isOk()) {
-            // Iron's refused before anything started - no mana attribute, or the spell is not
+            MinecraftForge.EVENT_BUS.unregister(watch);
+            // Under a required-positive profile a refusal is the failure: the run was selected to
+            // prove that a CustomNPC accepts a cast, and accepting a refusal as a pass is precisely
+            // how 0.9.0 could report this integration green without one cast ever starting (MN-015).
+            if (PositiveProfile.requiredMods().contains(CustomNpcsCompat.MODID)) {
+                PositiveProfile.missingHostCapability(helper,
+                        "anAcceptedCastAnnouncesOneStartAndOneEnding",
+                        "the expected-positive cast was refused: " + result.message());
+                return;
+            }
+            // Offline: Iron's refused before anything started - no mana attribute, or the spell is not
             // mob-castable in this build. A legitimate outcome and not what this test is about, but the
             // pairing still has to hold: nothing started, so nothing may have ended.
-            MinecraftForge.EVENT_BUS.unregister(watch);
             helper.assertTrue(watch.started == 0 && watch.terminals() == 0,
                     "a cast that never started must announce neither a start nor an ending");
             helper.succeed();
             return;
         }
         helper.assertTrue(watch.started == 1, "expected exactly one Started, got " + watch.started);
+        // Acceptance has to cost something. A "started" announcement with full mana and no cooldown
+        // would mean the announcement, not the cast, is what the test observed.
+        double manaAfterStart = manaOf(npc);
+        helper.assertTrue(manaAfterStart < manaBefore,
+                "an accepted cast must spend mana (" + manaBefore + " -> " + manaAfterStart + ")");
+        ManagedCasterState started = ManagedCasterState.peek(npc);
+        helper.assertTrue(started != null && started.cooldownRemaining(SPELL, npc) > 0,
+                "an accepted cast must start the spell's cooldown");
         helper.runAtTickTime(150, () -> {
             MinecraftForge.EVENT_BUS.unregister(watch);
             helper.assertTrue(watch.started == 1, "Started must not be announced twice for one cast");
@@ -322,11 +420,10 @@ public final class CustomNpcsCompatGameTests {
      */
     @GameTest(template = "platform", timeoutTicks = 160, required = false)
     public static void aMailboxRequestIsAnsweredAndConsumed(GameTestHelper helper) {
-        if (!CustomNpcsCompat.isLoaded()) {
-            helper.succeed();
+        if (!PositiveProfile.require(helper, CustomNpcsCompat.MODID, "aMailboxRequestIsAnsweredAndConsumed")) {
             return;
         }
-        Mob npc = spawnNpc(helper);
+        Mob npc = spawnNpc(helper, "aMailboxRequestIsAnsweredAndConsumed");
         ICustomNpc<?> wrapper = npc == null ? null : wrapperOf(npc);
         if (wrapper == null) {
             helper.succeed();
@@ -360,12 +457,17 @@ public final class CustomNpcsCompatGameTests {
     @GameTest(template = "platform", timeoutTicks = 160, required = false)
     public static void aScriptSuspensionBlocksCastingAndResumesWithoutResettingCooldowns(
             GameTestHelper helper) {
-        if (!IronsCompat.isLoaded() || !CustomNpcsCompat.isLoaded()
-                || !MagicNpcsConfig.customNpcsScriptMutationsEnabled()) {
+        if (!PositiveProfile.require(helper, IronsCompat.MODID, "aScriptSuspensionBlocksCastingAndResumesWithoutResettingCooldowns")) {
+            return;
+        }
+        if (!PositiveProfile.require(helper, CustomNpcsCompat.MODID, "aScriptSuspensionBlocksCastingAndResumesWithoutResettingCooldowns")) {
+            return;
+        }
+        if (!MagicNpcsConfig.customNpcsScriptMutationsEnabled()) {
             helper.succeed();
             return;
         }
-        Mob npc = spawnNpc(helper);
+        Mob npc = spawnNpc(helper, "aScriptSuspensionBlocksCastingAndResumesWithoutResettingCooldowns");
         if (npc == null) {
             helper.succeed();
             return;
@@ -382,14 +484,14 @@ public final class CustomNpcsCompatGameTests {
         // May or may not start; either way, whatever cooldown it leaves behind must only count down.
         api.cast(npc, SPELL.toString(), 1, null);
         ManagedCasterState state = ManagedCasterState.peek(npc);
-        int cooldownBefore = state == null ? 0 : state.cooldownRemaining(SPELL, npc.tickCount);
+        long cooldownBefore = state == null ? 0L : state.cooldownRemaining(SPELL, npc);
 
         helper.runAtTickTime(40, () -> {
             helper.assertTrue(api.setCastingSuspended(npc, false).isOk(), "resuming should succeed");
             helper.assertFalse(CustomNpcsActivityState.isScriptSuspended(npc.getUUID()),
                     "the suspension flag must be cleared, not merely ignored");
             ManagedCasterState after = ManagedCasterState.peek(npc);
-            int cooldownAfter = after == null ? 0 : after.cooldownRemaining(SPELL, npc.tickCount);
+            long cooldownAfter = after == null ? 0L : after.cooldownRemaining(SPELL, npc);
             helper.assertTrue(cooldownAfter <= cooldownBefore,
                     "a cooldown only ever counts down; resuming must not refill it (" + cooldownBefore
                             + " -> " + cooldownAfter + ")");
@@ -404,9 +506,10 @@ public final class CustomNpcsCompatGameTests {
      */
     @GameTest(template = "platform", timeoutTicks = 40, required = false)
     public static void theScriptGlobalIsVisibleToScriptsWhenEnabled(GameTestHelper helper) {
-        if (!CustomNpcsCompat.isLoaded()
-                || CustomNpcsCompat.status() == CustomNpcsCompat.Status.PRESENT_UNSUPPORTED
-                || !MagicNpcsConfig.customNpcsScriptGlobalEnabled()) {
+        if (!PositiveProfile.require(helper, CustomNpcsCompat.MODID, "theScriptGlobalIsVisibleToScriptsWhenEnabled")) {
+            return;
+        }
+        if (CustomNpcsCompat.status() == CustomNpcsCompat.Status.PRESENT_UNSUPPORTED || !MagicNpcsConfig.customNpcsScriptGlobalEnabled()) {
             helper.succeed();
             return;
         }
